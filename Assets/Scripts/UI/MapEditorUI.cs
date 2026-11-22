@@ -1,12 +1,13 @@
 using UnityEngine;
 using UnityEngine.UI;
 using EdoStrategy.Map;
+using EdoStrategy.Editor;
 
 namespace EdoStrategy.UI
 {
     public class MapEditorUI : MonoBehaviour
     {
-        [SerializeField] private Component controller;
+        [SerializeField] private MapEditorController controller;
         [SerializeField] private HexTilemapView mapView;
         [SerializeField] private InputField mapNameInput;
         [SerializeField] private Text statusText;
@@ -15,14 +16,7 @@ namespace EdoStrategy.UI
         {
             if (controller == null)
             {
-                foreach (MonoBehaviour behaviour in FindObjectsOfType<MonoBehaviour>())
-                {
-                    if (behaviour.GetType().Name == "MapEditorController")
-                    {
-                        controller = behaviour;
-                        break;
-                    }
-                }
+                controller = FindObjectOfType<MapEditorController>();
             }
             if (mapView == null)
             {
@@ -43,7 +37,7 @@ namespace EdoStrategy.UI
         {
             if (controller != null)
             {
-                controller.SendMessage("SetTerrainBrush", terrainId);
+                controller.SetTerrainBrush(terrainId);
             }
         }
 
@@ -51,7 +45,7 @@ namespace EdoStrategy.UI
         {
             if (controller != null)
             {
-                controller.SendMessage("SetDeployZoneBrush", 1);
+                controller.SetDeployZoneBrush(1);
             }
         }
 
@@ -59,7 +53,7 @@ namespace EdoStrategy.UI
         {
             if (controller != null)
             {
-                controller.SendMessage("SetDeployZoneBrush", 2);
+                controller.SetDeployZoneBrush(2);
             }
         }
 
