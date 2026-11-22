@@ -11,11 +11,10 @@ namespace EdoStrategy.Map
         [SerializeField] private int width = 16;
         [SerializeField] private int height = 10;
         [SerializeField] private Tilemap tilemap;
+        [SerializeField] private List<TerrainDefinition> terrainDefinitions =
+            new List<TerrainDefinition>();
 
         public HexGrid Grid { get; private set; }
-
-        private readonly Dictionary<string, TerrainDefinition> runtimeTerrains =
-            new Dictionary<string, TerrainDefinition>();
 
         private void Awake()
         {
@@ -23,10 +22,26 @@ namespace EdoStrategy.Map
             {
                 tilemap = GetComponent<Tilemap>();
             }
+        }
 
-            CreateRuntimeTerrainAssets();
-            Grid = new HexGrid(width, height, runtimeTerrains.Values);
-            GenerateSampleMap();
+        private void Start()
+        {
+            var definitions = new List<TerrainDefinition>();
+            foreach (TerrainDefinition definition in terrainDefinitions)
+            {
+                if (definition != null)
+                {
+                    definitions.Add(definition);
+                }
+            }
+
+            if (!ContainsTerrain(definitions, "plain"))
+            {
+                AddPlainFallback(definitions);
+            }
+
+            Grid = new HexGrid(width, height, definitions);
+            FillWithPlain();
             Grid.CellChanged += OnCellChanged;
             RefreshAllTiles();
         }
@@ -39,64 +54,46 @@ namespace EdoStrategy.Map
             }
         }
 
-        private void CreateRuntimeTerrainAssets()
+        private static bool ContainsTerrain(
+            IEnumerable<TerrainDefinition> definitions,
+            string terrainId)
         {
-            AddRuntimeTerrain("plain", "Plain", "#A8E6CF", 1, 1000, 1000, 1, 0);
-            AddRuntimeTerrain("forest", "Forest", "#2D6A4F", 2, 1200, 1000, 2, 0);
-            AddRuntimeTerrain("mountain", "Mountain", "#8D6E63", 3, 1400, 1000, 3, 1);
-            AddRuntimeTerrain("river", "River", "#4FC3F7", 3, 800, 1000, 1, 1);
+            foreach (TerrainDefinition definition in definitions)
+            {
+                if (definition != null && definition.terrainId == terrainId)
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
-        private void AddRuntimeTerrain(
-            string id,
-            string displayName,
-            string hexColor,
-            int moveCost,
-            int defenseMultiplier,
-            int attackMultiplier,
-            int visionCost,
-            int delayPenalty)
+        private static void AddPlainFallback(ICollection<TerrainDefinition> definitions)
         {
             TerrainDefinition definition =
                 ScriptableObject.CreateInstance<TerrainDefinition>();
-            definition.terrainId = id;
-            definition.displayName = displayName;
-            definition.baseMoveCost = moveCost;
-            definition.defenseMultiplier = defenseMultiplier;
-            definition.attackMultiplier = attackMultiplier;
-            definition.visionCost = visionCost;
-            definition.commandDelayPenalty = delayPenalty;
+            definition.terrainId = "plain";
+            definition.displayName = "Plain";
+            definition.baseMoveCost = 1;
+            definition.defenseMultiplier = 1000;
+            definition.attackMultiplier = 1000;
+            definition.visionCost = 1;
+            definition.commandDelayPenalty = 0;
 
-            var tile = new Tile
-            {
-                name = displayName + " Tile",
-                color = ParseColor(hexColor)
-            };
+            var tile = ScriptableObject.CreateInstance<Tile>();
+            tile.name = "Plain Tile";
+            tile.color = new Color(168f / 255f, 230f / 255f, 207f / 255f, 1f);
             definition.tileAsset = tile;
-            runtimeTerrains[id] = definition;
+            definitions.Add(definition);
         }
 
-        private void GenerateSampleMap()
+        private void FillWithPlain()
         {
             for (int y = 0; y < height; y++)
             {
                 for (int x = 0; x < width; x++)
                 {
-                    string terrainId = "plain";
-                    if ((x + y * 2) % 11 == 0)
-                    {
-                        terrainId = "forest";
-                    }
-                    else if ((x * 3 + y) % 17 == 0)
-                    {
-                        terrainId = "mountain";
-                    }
-                    else if (x == width / 2)
-                    {
-                        terrainId = "river";
-                    }
-
-                    Grid.SetCellTerrain(x, y, terrainId);
+                    Grid.SetCellTerrain(x, y, "plain");
                 }
             }
         }
@@ -124,13 +121,6 @@ namespace EdoStrategy.Map
             }
 
             tilemap.SetTile(new Vector3Int(cell.x, cell.y, 0), terrain.tileAsset);
-        }
-
-        private static Color ParseColor(string hexColor)
-        {
-            return ColorUtility.TryParseHtmlString(hexColor, out Color color)
-                ? color
-                : Color.white;
         }
     }
 }
