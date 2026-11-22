@@ -1,140 +1,214 @@
 # 江戸時代・ターン制ヘックスストラテジー 詳細開発設計書
 
 ## 1. プロジェクト概要・開発環境
-* **コンセプト**: 江戸時代を舞台にしたターン制ヘックス（正六角形）ストラテジーゲーム。本陣（指令部隊）からの距離や地形に応じた「命令・報告の遅延（情報戦）」を核とし、将来的にHearts of Iron IV（HoI4）のような師団設計・将来的に補給線・人的資源・偵察といった高度な戦略要素を拡張できる設計とする。ゲームバランス調整のための攻撃力や防御力等の数値の調整、地形の追加などが容易になるようにする。ゲーム要素の変更はすべてデータ構造の拡張で対応し、既存のコードを破壊的に変更しないことを極力守るとする。内容変更が絶えず発生することを留意する。
-* **エンジン・バージョン**: Unity 2022.3.62f3 LTS (2D Universal Render Pipeline)
-* **使用言語**: C# (.NET Standard 2.1)
-* **進行形式**: ターン制（Turn-Based）
+- **コンセプト:** 江戸時代を舞台にしたターン制ヘックス（正六角形）ストラテジーゲーム。本陣（指令部隊）からの距離や地形に応じた「命令・報告の遅延（情報戦）」を核とし、将来的に Hearts of Iron IV (HoI4) のような師団設計・補給線・人的資源・偵察といった高度な戦略要素を拡張できる設計とする。
+- **エンジン・バージョン:** Unity 2022.3.62f3 LTS (2D Universal Render Pipeline)
+- **使用言語:** C# (.NET Standard 2.1)
+- **進行形式:** ターン制 (Turn-Based)
+- **名前空間（Namespace）:** すべてのスクリプトは機能ごとに `EdoStrategy.Core` / `EdoStrategy.Map` / `EdoStrategy.Units` / `EdoStrategy.Combat` / `EdoStrategy.Command` / `EdoStrategy.UI` のいずれかに所属させる。
 
 ---
 
-## 2. アーキテクチャ原則（GitHub Copilot向けコーディング規約）
+## 2. アーキテクチャ原則（GitHub Copilot向け厳密規約）
 コードを生成・修正する際は、必ず以下の原則を遵守すること。
 
-1. **データと描画（View）の完全分離**
-   * マップ情報、ユニットのステータス、命令キュー、視界判定などのゲームロジックはすべて純粋なC#クラス（MonoBehaviourを継承しないデータクラス・マネージャークラス）で完結させる。
-   * `Tilemap` や `SpriteRenderer` などのUnityコンポーネントは、データ層の変更イベント（`Action` / `event`）を受け取って画面表示を更新する「描画専用（View）」として実装する。
-2. **将来のHoI4ライクな拡張を見据えたデータ構造**
-   * 初期実装（MVP）ではシンプルな数値で動作させるが、後から「師団設計」「補給線」「兵士人口（Manpower）」「偵察」を破壊的変更なしで追加できるよう、あらかじめクラス構造や配列・パラメータ枠を定義しておく。
-3. **座標系の統一**
-   * Unityの `Tilemap`（Odd-R / Even-R などの Offset座標）と、ヘックスの距離計算・隣接マス探索に便利な **Axial座標（`q, r`）** または **Cube座標（`x, y, z`）** を相互変換できるユーティリティクラス（`HexUtility`）を必ず用意する。
+1. **データ駆動設計（OCP：開放閉鎖の原則）の徹底:**
+   - 地形種別・兵科種別の識別子は `enum` のハードコード分岐（`switch` / `if`）に依存せず、すべて **`string` 型のID**（例: `"plain"`, `"forest"`, `"mountain"`, `"river"` / `"headquarters"`, `"infantry"`, `"musketeer"`, `"cavalry"`, `"artillery"`）で管理する。
+   - 数値調整や新規地形・新規兵科の追加は、ScriptableObject（`TerrainDefinition` / `UnitDefinition`）の新規作成・編集のみで完結させ、既存のコアロジック（移動計算・戦闘計算・視界計算）は一切修正しない。
+2. **非破壊的なデータ構造の拡張:**
+   - 将来の「師団設計」「補給線」「兵士人口（Manpower）」「偵察」を既存クラスの破壊的変更なしで追加できるよう、あらかじめ配列・リスト・パラメータ枠を定義しておく。
+3. **データ（Model/Logic）と描画（View）の完全分離:**
+   - マップ情報、ユニット状態、命令キュー、視界判定、戦闘計算はすべて純粋なC#クラス（`MonoBehaviour` 非継承）で実装する。
+   - `Tilemap` や `SpriteRenderer` を操作する `MonoBehaviour` は、データ層が発火する C# イベント（`event Action<...>`）を購読して画面を更新する「描画専用（View）」に徹する。
+4. **Unity `JsonUtility` シリアライズ制約の遵守:**
+   - JSON保存対象のデータクラスでは、Unity標準の `JsonUtility` がシリアライズできない型（`Dictionary`、`Queue`、`Stack`、2次元配列 `[,]`）を使用しない。
+   - グリッド配列は 1次元配列 `HexCell[]`（インデックス計算: `y * width + x`）を使用し、命令キューは `List<Order>` の先頭（インデックス `0`）を処理する方式で実装する。
+5. **整数千分率（Permille）による高解像度数値演算:**
+   - ステータス補正・地形補正・包囲ペナルティ・組織率・補給率はすべて **千分率整数（`int`, `1000` = `100.0%` = `1.0倍`）** で定義・演算する。途中の計算で小数丸め誤差による数値潰れを防ぎ、最終ダメージ算出時のみ整数化する。
 
 ---
 
-## 3. フォルダ・ファイル構成 (`Assets/` 配下)
-* `Assets/`
-  * `Maps/` : エディタ開発時に作成・保存されるJSONマップデータ
-  * `Prefabs/`
-    * `Units/` : 各兵科のユニット表示用プレハブ（Headquarters, Infantry等）
-    * `UI/` : 地形ボタン、部隊アイコン、ステータスウィンドウ等のUIプレハブ
-  * `Scenes/`
-    * `TitleScene.unity` : タイトル・マップ選択画面
-    * `MapEditorScene.unity` : タッチ＆なぞり操作によるマップ作成・JSON保存シーン
-    * `BattleScene.unity` : メインの戦闘・戦略シミュレーションシーン
-  * `Scripts/`
-    * `Core/`
-      * `GameManager.cs` : シーン間のマップデータ受け渡し、ゲーム全体管理
-      * `TurnManager.cs` : バトルのフェーズ管理（配置→命令→解決→勝敗判定）
-    * `Map/`
-      * `HexCoordinates.cs` : Offset座標とAxial/Cube座標の変換、距離計算
-      * `HexCell.cs` : 1マスごとのデータ（地形、移動コスト、将来の補給・視界枠）
-      * `HexGrid.cs` : マップ全体のセル配列管理、隣接マス探索、パスファインディング
-      * `HexTilemapView.cs` : HexGridのデータをTilemap（単色タイル）へ描画するView
-      * `MapSerializer.cs` : マップデータのJSON書き出し・読み込み処理
-    * `Editor/`（※インゲーム用のマップエディタ機能。UnityEditor拡張ではない）
-      * `MapEditorController.cs` : タッチ/ドラッグ判定、選択中の地形ブラシ適用、保存UI連携
-    * `Units/`
-      * `UnitEnums.cs` : 兵科タイプ（UnitType）、陣営（Faction）の定義
-      * `BattalionData.cs` : 大隊データ（将来の師団設計パーツ用）
-      * `UnitData.cs` : 師団（部隊）データ（兵員数、組織率、ステータス、命令キュー）
-      * `UnitView.cs` : 部隊のマップ上での表示・移動アニメーション・ゴースト表示
-    * `Command/`
-      * `Order.cs` : 命令データ（移動先座標、攻撃対象ID、残り遅延ターン数）
-      * `CommandDelaySystem.cs` : 本陣からの距離・地形に基づく遅延ターン計算とキュー処理
-      * `FogOfWarSystem.cs` : 視界計算と、報告遅延による敵情報（ゴースト）の更新
-    * `UI/`
-      * `MapEditorUI.cs` : 地形パレット（平地・森・山・川）、マップ名入力、保存ボタン
-      * `BattleUI.cs` : 部隊配置パネル、ターン終了ボタン、部隊ステータス表示
-  * `Tiles/` : 単色の正六角形Tileアセット（Plain, Forest, Mountain, River）
+## 3. 座標系・ヘックス数学仕様 (`HexUtility.cs`)
+Unityの `Grid` コンポーネントは **Hexagonal Pointy Top（尖頂六角形）**、座標系は **Odd-R Offset座標**（奇数行 `y % 2 != 0` が右へ `+0.5` シフト）に統一する。
+
+### 3.1 Offset座標 `(x, y)` と Axial座標 `(q, r)` の相互変換式
+- **Offset `(x, y)` → Axial `(q, r)`:**
+  - `q = x - (y - (y & 1)) / 2`
+  - `r = y`
+- **Axial `(q, r)` → Offset `(x, y)`:**
+  - `x = q + (r - (r & 1)) / 2`
+  - `y = r`
+
+### 3.2 ヘックス距離と隣接6方向ベクトル（Axial座標基準）
+- **2点 $(q_1, r_1)$ と $(q_2, r_2)$ の最短ヘックス距離 $D$:**
+  - $D = \frac{|q_1 - q_2| + |q_1 + r_1 - q_2 - r_2| + |r_1 - r_2|}{2}$
+- **隣接6方向ベクトル（時計回りインデックス `0`〜`5`）:**
+  - `0`（右）: `(+1, 0)`
+  - `1`（右下）: `(0, +1)`
+  - `2`（左下）: `(-1, +1)`
+  - `3`（左）: `(-1, 0)`
+  - `4`（左上）: `(0, -1)`
+  - `5`（右上）: `(+1, -1)`
 
 ---
 
-## 4. データ構造・クラス詳細仕様
+## 4. フォルダ・ファイル構成 (`Assets/` 配下)
+- `Assets/`
+  - `Data/`
+    - `Terrains/` : `TerrainDefinition` アセット（Plain, Forest, Mountain, River）
+    - `Units/` : `UnitDefinition` アセット（Headquarters, Infantry, Musketeer, Cavalry, Artillery）
+  - `Maps/` : エディタ開発時に作成・保存されるJSONマップデータ
+  - `Prefabs/`
+    - `Units/` : 部隊表示用プレハブ（実体アイコン・ゴーストアイコン・ステータスバー）
+    - `UI/` : 地形パレットボタン、部隊配置ボタン、命令アイコンプレハブ
+  - `Scenes/`
+    - `TitleScene.unity` : タイトル・マップ選択画面
+    - `MapEditorScene.unity` : タッチ＆なぞり操作によるマップ作成・JSON保存シーン
+    - `BattleScene.unity` : メインの戦闘・戦略シミュレーションシーン
+  - `Scripts/`
+    - `Core/`
+      - `GameManager.cs` : マスターデータレジストリ保持、シーン間のマップJSON受け渡し
+      - `TurnManager.cs` : バトルのステートマシン管理（配置→命令→解決→偵察報告→勝敗判定）
+    - `Map/`
+      - `HexUtility.cs` : Odd-R ⇔ Axial変換、距離計算、隣接探索、方向インデックス判定
+      - `TerrainDefinition.cs` : 地形マスターデータ（ScriptableObject）
+      - `HexCell.cs` : 1マスごとのランタイムデータ
+      - `HexGrid.cs` : マップ全体の1次元セル配列管理、移動コスト計算、A*パスファインディング
+      - `HexTilemapView.cs` : `HexGrid` の変更イベントを受け取り `Tilemap` を更新するView
+      - `MapSerializer.cs` : `MapSaveData` のJSONシリアライズ・ファイル保存/読込
+    - `Editor/`（※インゲーム用のマップエディタ機能。`UnityEditor` 名前空間は使用しない）
+      - `MapEditorController.cs` : タッチ/ドラッグ判定、選択ブラシ適用、保存UI連携
+    - `Units/`
+      - `UnitDefinition.cs` : 兵科マスターデータ（ScriptableObject）
+      - `BattalionData.cs` : 大隊データ（師団設計の最小構成単位）
+      - `UnitData.cs` : 師団（部隊）データ（兵員数、組織率、補給、命令リスト）
+      - `UnitView.cs` : 部隊・ゴーストのマップ描画、移動補間、命令ライン描画
+    - `Combat/`
+      - `CombatModifier.cs` : 地形・包囲・兵科相性・補給などの補正を動的リストで扱う修飾子
+      - `CombatResolver.cs` : 包囲判定、修飾子集約、兵員・組織率ダメージ計算エンジン
+    - `Command/`
+      - `Order.cs` : 命令データ（種別、目標座標、対象ユニットID、残り遅延ターン数）
+      - `CommandDelaySystem.cs` : 本陣からの距離・経路地形に基づく遅延計算と命令キュー進行
+      - `IntelReport.cs` : 偵察報告データ（発見敵ID、目撃座標、本陣到達までの残りターン数）
+      - `FogOfWarSystem.cs` : 視界判定、報告遅延タイマー進行、ゴースト座標の更新
+    - `UI/`
+      - `MapEditorUI.cs` : 地形パレット、陣営エリアブラシ、マップ名入力、保存ボタン
+      - `BattleUI.cs` : 部隊配置パネル、ターン終了ボタン、選択部隊・敵情報パネル
+  - `Tiles/` : 単色の正六角形Tileアセット（Plain, Forest, Mountain, River）
 
-### 4.1 マップ・地形システム (`Scripts/Map/`)
+---
 
-#### 地形種別 (`TerrainType`)
-川は「マス自体を川とする（パターンA）」を採用し、初期段階ではRule Tileを使わず単色の六角形タイルで描画する。
+## 5. データ構造・クラス詳細仕様
 
-| Enum値 | 日本語名 | タイル色（仮） | 基本移動コスト | 防御補正 | 視界遮蔽 | 備考・将来拡張 |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| `Plain` | 平地 | 黄緑 (`#A8E6CF`) | `1` | `0%` | なし | 標準地形 |
-| `Forest` | 森 | 深緑 (`#2D6A4F`) | `2` | `+20%` | あり | 騎兵は追加コスト(+1) |
-| `Mountain` | 山 | 茶/灰 (`#8D6E63`) | `3` | `+40%` | あり | 砲兵の射程+1、騎兵進入不可(または高コスト) |
-| `River` | 川 | 水色 (`#4FC3F7`) | `3` | `-20%` | なし | 渡河ペナルティ（防御低下） |
+### 5.1 マップ・地形システム (`EdoStrategy.Map`)
 
-#### `HexCell` クラス設計
+#### `TerrainDefinition` (ScriptableObject)
+初期マスターデータとして以下の4種を作成する（川はマス自体を川とするパターンAを採用し、単色タイルで描画する）。
+
+| `terrainId` | 表示名 (`displayName`) | タイル色（仮） | 基本移動コスト (`baseMoveCost`) | 防御倍率 (`defenseMultiplier`) | 視界遮蔽コスト (`visionCost`) | 命令遅延加算 (`commandDelayPenalty`) | 備考 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `"plain"` | 平地 | 黄緑 (`#A8E6CF`) | `1` | `1000` (0%) | `1` | `0` | 標準地形 |
+| `"forest"` | 森 | 深緑 (`#2D6A4F`) | `2` | `1200` (+20%) | `2` | `0` | 視界を遮りやすい |
+| `"mountain"` | 山 | 茶/灰 (`#8D6E63`) | `3` | `1400` (+40%) | `3` | `1` | 伝令遅延+1、防御有利 |
+| `"river"` | 川 | 水色 (`#4FC3F7`) | `3` | `800` (-20%) | `1` | `1` | 渡河ペナルティ（防御低下） |
+
+    [CreateAssetMenu(fileName = "NewTerrain", menuName = "EdoStrategy/TerrainDefinition")]
+    public class TerrainDefinition : ScriptableObject
+    {
+        public string terrainId;
+        public string displayName;
+        public TileBase tileAsset;
+        public int baseMoveCost = 1;
+        public int defenseMultiplier = 1000; // 千分率 (1000 = 100%)
+        public int attackMultiplier = 1000;  // 千分率 (地形からの攻撃補正)
+        public int visionCost = 1;           // 視界消費コスト
+        public int commandDelayPenalty = 0;  // 伝令経路通過時の追加遅延ターン
+    }
+
+#### `HexCell` と `MapSaveData`
     [System.Serializable]
     public class HexCell
     {
-        public int x; // Offset X座標
-        public int y; // Offset Y座標
-        public TerrainType terrainType;
-        public int deployZoneFaction; // 0: なし, 1: 自軍初期配置エリア, 2: 敵軍初期配置エリア
+        public int x;
+        public int y;
+        public string terrainId = "plain";
+        public int deployZoneFaction = 0; // 0: なし, 1: 自軍初期配置エリア, 2: 敵軍初期配置エリア
 
         // --- 将来のHoI4拡張用パラメータ枠 ---
-        public int infrastructureLevel = 1; // 街道・インフラレベル（補給効率に影響）
-        public float currentSupply = 100f;  // 現在の補給物資量
-        public bool isVisibleToPlayer = false; // 現在の視界内フラグ
+        public int infrastructureLevel = 1; // 街道・インフラレベル (1〜5)
+        public int currentSupply = 1000;    // 現在の補給物資量 (千分率)
+        [System.NonSerialized] public bool isVisibleToPlayer = false;
+    }
+
+    [System.Serializable]
+    public class MapSaveData
+    {
+        public string mapName;
+        public int width;
+        public int height;
+        public HexCell[] cells; // 長さ = width * height (index = y * width + x)
     }
 
 #### マップJSON保存・読込仕様 (`MapSerializer.cs`)
-* **保存タイミング**: `MapEditorScene` でプレイヤーが地形を塗った後、UIの「保存（Save）」ボタンを押した瞬間に実行する。
-* **保存先パス**:
-  * Unityエディタ実行時: `Application.dataPath + "/Maps/" + mapName + ".json"`（開発中に確認しやすいようプロジェクト内に保存）
-  * ビルド後（PC / WebGL等）: `Application.persistentDataPath + "/Maps/" + mapName + ".json"`
-* **JSONフォーマット例**:
-      {
-        "mapName": "Kawanakajima_01",
-        "width": 20,
-        "height": 15,
-        "cells": [
-          { "x": 0, "y": 0, "terrainType": 0, "deployZoneFaction": 1, "infrastructureLevel": 1 },
-          { "x": 1, "y": 0, "terrainType": 3, "deployZoneFaction": 0, "infrastructureLevel": 1 }
-        ]
-      }
+- **保存タイミング:** `MapEditorScene` でUIの「保存（Save）」ボタンを押した瞬間に実行する。
+- **保存先パス:**
+  - Unityエディタ実行時（`#if UNITY_EDITOR`）: `Path.Combine(Application.dataPath, "Maps", mapName + ".json")`
+  - ビルド後（PC / WebGL等）: `Path.Combine(Application.persistentDataPath, "Maps", mapName + ".json")`
+- **インゲームマップエディタ操作 (`MapEditorController.cs`):**
+  - 画面上のパレットボタンで選択中のブラシ（`string currentTerrainId` または `int currentDeployZone`）を切り替える。
+  - `Input.GetMouseButton(0)` 中に `EventSystem.current.IsPointerOverGameObject()` が `false` の場合、スクリーン座標を `Camera.main.ScreenToWorldPoint` → `Tilemap.WorldToCell` で Offset座標 `(x, y)` に変換し、`HexGrid.SetCellTerrain(x, y, currentTerrainId)` を呼ぶ。タップとドラッグ（なぞり）の双方で連続塗り替えを行う。
 
 ---
 
-### 4.2 マップエディタ操作仕様 (`MapEditorController.cs`)
-* **入力方式**: マウスクリック／ドラッグ、およびタッチパネルのタップ／スワイプに対応（Unityの `Input.GetMouseButton(0)` と `EventSystem.current.IsPointerOverGameObject()` を併用し、UIボタン操作時の誤爆を防ぐ）。
-* **操作フロー**:
-  1. 画面下部（または側面）の地形パレットボタン（「平地」「森」「山」「川」「自軍エリア」「敵軍エリア」）をタップし、`selectedBrush` を切り替える。
-  2. キャンバス（マップ）上の任意のマスをタップすると、その1マスの `HexCell` データを書き換わり、`HexTilemapView` が即座にタイルを更新する。
-  3. 指やマウスボタンを押したままマップ上を**なぞる（ドラッグする）**と、ポインタが通過したすべてのマスが連続して塗り替えられる。
+### 5.2 ユニット・師団システム (`EdoStrategy.Units`)
 
----
+#### `UnitDefinition` (ScriptableObject)
+高解像度スケーリングに基づき、初期兵科5種を以下の基準値で定義する。
 
-### 4.3 ユニット・師団システム (`Scripts/Units/`)
+| `unitTypeId` | 表示名 | 最大兵力 (`maxManpower`) | 基礎攻撃 (`baseAttack`) | 基礎防御 (`baseDefense`) | 突破力 (`breakthrough`) | 移動力 (`movePoints`) | 射程 (`attackRange`) | 偵察力 (`recon`) | 視界 (`visionRange`) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `"headquarters"` | 本陣 | `2000` | `120` | `250` | `100` | `2` | `1` | `2` | `3` |
+| `"infantry"` | 歩兵（槍足軽） | `5000` | `300` | `450` | `250` | `3` | `1` | `1` | `2` |
+| `"musketeer"` | 銃兵（鉄砲隊） | `3000` | `550` | `180` | `300` | `3` | `2` | `1` | `2` |
+| `"cavalry"` | 騎兵 | `2500` | `480` | `260` | `600` | `5` | `1` | `3` | `4` |
+| `"artillery"` | 砲兵（大筒） | `1500` | `750` | `120` | `400` | `1` | `3` | `0` | `2` |
 
-#### 初期兵科 (`UnitType`)
-| Enum値 | 兵科名 | 特徴・役割 | 攻撃力(目安) | 防御力(目安) | 移動力 | 射程 | 偵察力 |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| `Headquarters` | 本陣（指令部隊） | プレイヤーの分身。命令・報告の起点。撃破されると敗北。 | 5 | 10 | 2 | 1 | 2 |
-| `Infantry` | 歩兵（槍足軽） | 前線維持・壁役。コストが低く安定。 | 15 | 20 | 3 | 1 | 1 |
-| `Musketeer` | 銃兵（鉄砲隊） | 遠距離火力。近接防御が低い。 | 25 | 8 | 3 | 2 | 1 |
-| `Cavalry` | 騎兵 | 高機動力・突撃力。森・山が苦手。 | 22 | 12 | 5 | 1 | 3 |
-| `Artillery` | 砲兵（大筒） | 超長射程・高火力だが移動が極端に遅い。 | 35 | 5 | 1 | 3 | 0 |
+    [System.Serializable]
+    public struct TerrainMoveCostOverride
+    {
+        public string terrainId;
+        public int moveCost; // -1 の場合は進入不可（例: 騎兵の山岳進入制限など）
+    }
 
-#### 将来のHoI4拡張を見据えた師団データ構造 (`UnitData.cs`)
-最初から「1部隊＝1兵科」ではなく、**「1つの師団（`UnitData`）の中に、複数の大隊（`BattalionData`）を持つリスト構造」**にしておく。初期MVPではリストに1つだけ大隊を入れて動かす。
+    [CreateAssetMenu(fileName = "NewUnit", menuName = "EdoStrategy/UnitDefinition")]
+    public class UnitDefinition : ScriptableObject
+    {
+        public string unitTypeId;
+        public string displayName;
+        public bool isHeadquarters = false;
+        public GameObject unitPrefab;
+
+        public int maxManpower = 3000;
+        public int baseAttack = 300;
+        public int baseDefense = 300;
+        public int breakthrough = 250;
+        public int movePoints = 3;
+        public int attackRange = 1;
+        public int recon = 1;
+        public int visionRange = 2;
+
+        // 地形別の移動コスト上書き（OCP準拠: ロジック側で兵科分岐を書かない）
+        public List<TerrainMoveCostOverride> terrainCostOverrides = new List<TerrainMoveCostOverride>();
+    }
+
+#### 師団・大隊データ構造 (`BattalionData.cs` / `UnitData.cs`)
     [System.Serializable]
     public class BattalionData
     {
-        public UnitType unitType;
-        public int maxManpower;     // 最大兵員数（例: 1000人）
-        public int currentManpower; // 現在兵員数
-        public float equipmentRatio = 1.0f; // 装備充足率（0.0〜1.0）
+        public string unitTypeId;
+        public int maxManpower;
+        public int currentManpower;
+        public int equipmentRatio = 1000; // 千分率 (1000 = 100%)
     }
 
     [System.Serializable]
@@ -146,84 +220,120 @@
         public int x;
         public int y;
 
-        // 師団を構成する大隊リスト（将来、師団設計画面でここを編集する）
+        // 師団を構成する大隊リスト（MVPでは要素1つ、将来は師団設計で複数編成）
         public List<BattalionData> battalions = new List<BattalionData>();
 
-        // 戦闘・戦略ステータス（大隊リストの合計・平均から算出）
-        public float organization = 100f;    // 組織率（士気・指揮統制。0になると撤退・壊滅）
-        public float maxOrganization = 100f;
-        public float supplyStatus = 1.0f;    // 補給状態（将来用: 1.0で完全補給）
+        // 戦闘・戦略ステータス（千分率）
+        public int organization = 1000;    // 組織率（0で敗走・壊滅）
+        public int maxOrganization = 1000;
+        public int supplyStatus = 1000;    // 補給状態（将来用）
 
-        // 命令キュー（遅延実行用）
-        public Queue<Order> orderQueue = new Queue<Order>();
+        // 命令キュー（JsonUtility対応のためListで実装し、index 0 を先頭として扱う）
+        public List<Order> pendingOrders = new List<Order>();
     }
 
 ---
 
-### 4.4 コアシステム：命令・報告の遅延 (`Scripts/Command/`)
+### 5.3 戦闘・包囲修飾子システム (`EdoStrategy.Combat`)
 
-#### 1. 遅延ターン数の計算式 (`CommandDelaySystem.cs`)
-本陣（`Headquarters`）の座標 P_HQ と、対象部隊の座標 P_unit の**ヘックス距離（最短マス数）**を D とする。
-* **基本遅延ターン数**: `DelayTurns = Floor(D / 3)`
-  （例：距離0〜2マスなら `0ターン（即時）`、3〜5マスなら `1ターン遅れ`、6〜8マスなら `2ターン遅れ`）
-* **地形・偵察補正（将来拡張）**:
-  * 本陣と部隊の間に「山」や「川」が多い場合は `+1ターン` 遅延。
-  * 部隊の「偵察力（`recon`）」が高い場合や、「狼煙（のろし）」スキル使用時は `-1ターン` 短縮。
+#### `CombatModifier` クラス
+戦闘計算時に適用されるすべての補正（地形、包囲、兵科相性、補給不足、指揮統制）は、`CombatModifier` の動的リストに集約して計算する。
 
-#### 2. 命令の遅延（Command Delay）
-* プレイヤーが部隊に「移動（座標X, Yへ）」または「攻撃（敵IDへ）」を指示すると即座には動かず、部隊の「命令キュー（`Queue<Order>`）」に格納される。
-* `Order` は対象部隊の `orderQueue` に追加される。
-* 毎ターンの「解決フェーズ」で `remainingDelayTurns` が `1` 減少し、`0` になった瞬間にその命令が現地で実行される。
-* **UI表現**: 命令を出した直後は、マップ上に「伝令の移動ルート（点線）」と「あと◯ターンで命令到達」のアイコンが表示される。
+    [System.Serializable]
+    public class CombatModifier
+    {
+        public string sourceId;          // 例: "terrain_mountain", "flank_pincer", "low_supply"
+        public string displayName;       // UI表示用名称
+        public int attackMultiplier = 1000;     // 千分率 (1000 = 1.0倍)
+        public int defenseMultiplier = 1000;    // 千分率 (1000 = 1.0倍)
+        public int orgDamageMultiplier = 1000;  // 被組織率ダメージ倍率 (1000 = 1.0倍)
+    }
 
-#### 3. 報告の遅延と視界（Information Delay & Fog of War）
-* 自軍ユニットの周囲（視界範囲内）にいる敵ユニットのみ「発見状態」となる。
-* 敵を発見した自軍部隊と「本陣」との距離が D の場合、その敵の位置情報がプレイヤー画面に反映されるまでに `DelayTurns` ターンかかる。
-* 遅延が発生している間、プレイヤーの画面には**「`DelayTurns` ターン前に目撃された古い位置」に半透明の敵アイコン（ゴースト）**が表示される（「敵はそこにいると報告を受けたが、現在はすでに移動しているかもしれない」という緊張感を生む）。
-
----
-
-### 4.5 バトル進行フロー（ステートマシン）
-`TurnManager.cs` は以下の状態（`BattleState` enum）を順番に遷移させる。
-
-1. **`DeploymentPhase`（初期配置フェーズ）**
-   * マップJSONを読み込み生成。
-   * プレイヤーは `deployZoneFaction == 1` のマスに、手持ちの部隊（本陣1＋任意の兵科）を配置する。
-   * 敵軍は `deployZoneFaction == 2` のマスに自動配置される。
-   * 「開戦（Start Battle）」ボタン押下で次へ。
-2. **`PlayerCommandPhase`（プレイヤー命令フェーズ）**
-   * プレイヤーは自軍部隊を選択し、移動や攻撃の指示を出す（命令キューへ登録）。
-   * すでにキューに入っている待機中の命令のキャンセル（伝令の呼び戻し／上書き）も可能。
-   * 「ターン終了（End Turn）」ボタン押下で次へ。
-3. **`ExecutionPhase`（解決フェーズ）**
-   * 全自軍部隊の `orderQueue` の遅延ターン数を `-1` し、`0` になった命令を実行（移動・戦闘）。
-   * 敵AIの思考と行動実行。
-   * 戦闘ダメージ計算（兵員数 `currentManpower` と組織率 `organization` の減少）。
-4. **`ReconAndReportPhase`（視界・伝令更新フェーズ）**
-   * 視界の再計算と、本陣への報告遅延タイマーの進行、ゴースト表示の更新。
-5. **`CheckVictoryPhase`（勝敗判定フェーズ）**
-   * **勝利条件**: 敵の `Headquarters`（本陣）の兵員数が0になる、または敵の全滅。
-   * **敗北条件**: 自軍の `Headquarters`（本陣）の兵員数が0になる、または自軍の全滅。
-   * 勝敗が決まっていなければターン数を `+1` し、`PlayerCommandPhase` へ戻る。
+#### 包囲・挟み撃ち（Flanking / Encirclement）判定ルール (`CombatResolver.cs`)
+防御側ユニットの隣接6マス（方向インデックス `0`〜`5`）を `HexUtility` で走査し、敵対ユニットが占拠している方向インデックス集合 $E$ を取得する。
+1. **包囲レベル判定（$|E| \ge 2$ の場合）:**
+   - **完全包囲（Encircled）:** 隣接6マスすべてが「敵ユニット」または「進入不可地形」で塞がれており退路が0マスの場合。
+     - `defenseMultiplier = 500`（防御 -50%）、`orgDamageMultiplier = 1600`（組織率ダメージ +60%）。
+   - **背面挟撃（Pincer）:** 方向インデックス差が `3`（対角線上・180度反対側）のペアが存在する場合。
+     - `defenseMultiplier = 650`（防御 -35%）、`orgDamageMultiplier = 1500`（組織率ダメージ +50%）。
+   - **挟撃（Crossfire）:** 方向インデックス差が `2`（120度）のペアが存在する場合。
+     - `defenseMultiplier = 750`（防御 -25%）、`orgDamageMultiplier = 1300`（組織率ダメージ +30%）。
+   - **側面攻撃（Flanked）:** 上記以外で隣接する敵が2部隊以上いる場合。
+     - `defenseMultiplier = 850`（防御 -15%）、`orgDamageMultiplier = 1150`（組織率ダメージ +15%）。
+2. **ダメージ計算式（千分率演算）:**
+   - 師団の有効攻撃力 $A_{eff}$ = $\sum (\text{大隊基礎攻撃} \times \frac{\text{現在兵員}}{\text{最大兵員}} \times \frac{\text{装備充足率}}{1000}) \times \frac{\text{補給状態}}{1000} \times \prod \frac{\text{攻撃修飾子}}{1000}$
+   - 師団の有効防御力 $D_{eff}$ = $\sum (\text{大隊基礎防御} \times \frac{\text{現在兵員}}{\text{最大兵員}}) \times \frac{\text{地形防御補正}}{1000} \times \prod \frac{\text{防御修飾子}}{1000}$
+   - **兵員ダメージ（Manpower Loss）:** $\max\left(10,\ \lfloor \frac{A_{eff} \times A_{eff}}{A_{eff} + D_{eff}} \times 0.5 \rfloor\right)$
+   - **組織率ダメージ（Org Loss）:** $\max\left(15,\ \lfloor \frac{A_{eff} \times 1000}{D_{eff} + 200} \times \frac{\text{組織率ダメージ修飾子}}{1000} \rfloor\right)$
 
 ---
 
-## 5. 段階的実装ステップ（Copilotへの指示順序）
+### 5.4 命令・報告の遅延システム (`EdoStrategy.Command`)
 
-開発は以下の順番で1ファイル・1機能ずつ実装し、動作確認を行いながら進める。
+#### 命令データ (`Order.cs`) と遅延計算 (`CommandDelaySystem.cs`)
+    public enum OrderType { Move, Attack }
 
-* **Phase 1: マップ基盤と描画**
-  * `HexCoordinates.cs` / `HexCell.cs` / `HexGrid.cs` / `HexTilemapView.cs` の作成。
-  * Unityシーン上に `Grid` と `Tilemap` を配置し、スクリプトから指定サイズの平地マップが描画されることを確認する。
-* **Phase 2: タッチ＆なぞりマップエディタとJSON保存**
-  * `MapSerializer.cs` / `MapEditorController.cs` / `MapEditorUI.cs` の作成。
-  * 地形ボタンを押してタップ＆なぞりで「平地・森・山・川」を塗り、JSONファイルとして保存・再読込できることを確認する。
-* **Phase 3: ユニット配置と基本移動**
-  * `UnitData.cs` / `UnitView.cs` / `TurnManager.cs` の作成。
-  * 保存したJSONマップを読み込み、配置フェーズで自軍ユニットを置き、地形の移動コストを考慮して移動できることを確認する。
-* **Phase 4: 戦闘と勝敗判定**
-  * 射程判定、攻撃・反撃のダメージ計算、本陣撃破時のリザルト画面実装。
-* **Phase 5: 命令・報告の遅延システム**
-  * `CommandDelaySystem.cs` / `FogOfWarSystem.cs` の実装。本陣からの距離に応じた命令キュー遅延と、敵のゴースト表示を実装する。
-* **Phase 6: HoI4ライクな戦略拡張**
-  * 補給線（街道からの物資輸送と補給切れペナルティ）、師団設計画面（大隊スロットのカスタマイズ）、兵士人口（Manpower）プールからの補充システムの実装など。
+    [System.Serializable]
+    public class Order
+    {
+        public OrderType orderType;
+        public int targetX;
+        public int targetY;
+        public string targetUnitId;
+        public int remainingDelayTurns;
+    }
+
+- **遅延ターン算出式:**
+  - 本陣（`isHeadquarters == true`）の座標 $P_{HQ}$ と対象部隊の座標 $P_{unit}$ の最短ヘックス距離を $D$ とする。
+  - $\text{DelayTurns} = \max\left(0,\ \lfloor \frac{D}{3} \rfloor + \text{TerrainDelayPenalty} - \text{ReconBonus}\right)$
+  - 距離 `0〜2` マスは `0ターン（即時）`、`3〜5` マスは `1ターン遅延`、`6〜8` マスは `2ターン遅延`。
+
+#### 偵察報告データ (`IntelReport.cs`) とゴースト表示 (`FogOfWarSystem.cs`)
+    [System.Serializable]
+    public class IntelReport
+    {
+        public string targetUnitId;
+        public string reportedUnitTypeId;
+        public int reportedX;
+        public int reportedY;
+        public int remainingReportTurns; // 0になった瞬間にプレイヤー画面へ反映
+        public int spottedTurn;
+    }
+
+- **視界と報告フロー:**
+  1. 毎ターン `ReconAndReportPhase` で、全自軍部隊から `visionRange` 以内のセルを走査し、`TerrainDefinition.visionCost` を累積して視界内セル（`isVisibleToPlayer = true`）を確定する。
+  2. 視界内の敵ユニットを発見した際、発見した自軍部隊と本陣の距離 $D$ から $\text{DelayTurns}$ を計算し、`IntelReport` を生成して報告キューへ追加する。
+  3. 既存の全 `IntelReport` の `remainingReportTurns` を `-1` し、`0` 以下になった報告をプレイヤーの認識情報（`KnownEnemyIntel`）へ上書き反映する。
+  4. 本陣の直接視界内（`DelayTurns == 0`）の敵は実体として描画し、遠方から遅延報告された敵は**「報告時の座標（`reportedX, reportedY`）に半透明のゴーストアイコン」**として `UnitView` に描画させる。
+
+---
+
+## 6. バトル進行ステートマシン (`TurnManager.cs`)
+`BattleState` enum を定義し、以下の順序でフェーズを遷移させる。
+
+1. **`DeploymentPhase`（初期配置フェーズ）:**
+   - `MapSerializer` でJSONマップを読み込み、`HexGrid` と `HexTilemapView` を初期化。
+   - プレイヤーは `deployZoneFaction == 1` のセルに本陣1部隊＋任意の部隊を配置。敵軍は `deployZoneFaction == 2` のセルに自動配置。
+   - 「開戦」ボタンで `PlayerCommandPhase` へ遷移。
+2. **`PlayerCommandPhase`（プレイヤー命令フェーズ）:**
+   - プレイヤーが自軍部隊を選択し、移動先または攻撃対象を指定して `Order` を `pendingOrders` に登録（待機中命令のキャンセル・上書きも可能）。
+   - 「ターン終了」ボタンで `ExecutionPhase` へ遷移。
+3. **`ExecutionPhase`（解決フェーズ）:**
+   - 全自軍部隊の `pendingOrders[0]` の `remainingDelayTurns` を `-1` し、`0` になった命令を順次実行（移動・戦闘解決）。
+   - 敵AIの行動決定と実行。
+4. **`ReconAndReportPhase`（視界・伝令更新フェーズ）:**
+   - `FogOfWarSystem` により視界再計算、偵察報告タイマー進行、ゴースト表示更新イベントを発火。
+5. **`CheckVictoryPhase`（勝敗判定フェーズ）:**
+   - 敵本陣（`isHeadquarters == true`）の兵員数 `<= 0` または敵全滅 → **プレイヤー勝利**。
+   - 自軍本陣の兵員数 `<= 0` または自軍全滅 → **プレイヤー敗北**。
+   - 未決着の場合、ターン数を `+1` して `PlayerCommandPhase` へ戻る。
+
+---
+
+## 7. 段階的実装ステップ（Copilotへの指示順序）
+1. **Phase 1（マップ基盤と描画）:** `HexUtility.cs` / `TerrainDefinition.cs` / `HexCell.cs` / `HexGrid.cs` / `HexTilemapView.cs` を実装し、Odd-R ヘックスグリッドに単色タイルが描画されることを確認する。
+2. **Phase 2（マップエディタとJSON保存）:** `MapSerializer.cs` / `MapEditorController.cs` / `MapEditorUI.cs` を実装し、タップ＆なぞり操作で地形と初期配置エリアを塗り、JSON保存・再読込できることを確認する。
+3. **Phase 3（ユニット配置と移動）:** `UnitDefinition.cs` / `BattalionData.cs` / `UnitData.cs` / `UnitView.cs` / `TurnManager.cs` を実装し、配置フェーズから移動コストを考慮した移動ができることを確認する。
+4. **Phase 4（戦闘・包囲計算と勝敗判定）:** `CombatModifier.cs` / `CombatResolver.cs` を実装し、包囲ペナルティを含めた戦闘ダメージ計算と本陣撃破による勝敗判定を実装する。
+5. **Phase 5（命令・報告遅延システム）:** `Order.cs` / `CommandDelaySystem.cs` / `IntelReport.cs` / `FogOfWarSystem.cs` を実装し、本陣からの距離に応じた命令キュー遅延と敵ゴースト表示を実装する。
+6. **Phase 6（HoI4ライクな戦略拡張）:** `HexCell.infrastructureLevel` を用いた補給線（兵站ルートと補給切れペナルティ）、師団編成UI（複数 `BattalionData` の編集）、兵士人口（Manpower）プールからの補充システムなどを追加する。
