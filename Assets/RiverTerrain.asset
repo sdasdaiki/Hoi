@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   terrainId: river
   displayName: "\u5DDD"
-  tileAsset: {fileID: 11400000, guid: 91cbadca0e81e694a8f57188f51ec091, type: 2}
+  tileAsset: {fileID: 11400000, guid: 428cf4da607d1a34f86b26356a98448c, type: 2}
   baseMoveCost: 1
   defenseMultiplier: 1000
   attackMultiplier: 1000

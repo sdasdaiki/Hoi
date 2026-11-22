@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   terrainId: mountain
   displayName: "\u5C71"
-  tileAsset: {fileID: 11400000, guid: 91cbadca0e81e694a8f57188f51ec091, type: 2}
+  tileAsset: {fileID: 11400000, guid: 15534d20b2eb1824ba9f40f2f07a2855, type: 2}
   baseMoveCost: 1
   defenseMultiplier: 1000
   attackMultiplier: 1000
