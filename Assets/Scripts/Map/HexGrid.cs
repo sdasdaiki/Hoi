@@ -68,6 +68,53 @@ namespace EdoStrategy.Map
             CellChanged?.Invoke(this, cell);
         }
 
+        public void SetCellDeployZone(int x, int y, int faction)
+        {
+            HexCell cell = GetCell(x, y);
+            if (cell == null)
+            {
+                return;
+            }
+
+            cell.deployZoneFaction = faction;
+        }
+
+        public void ApplyMapSaveData(MapSaveData saveData)
+        {
+            if (saveData == null || saveData.width <= 0 || saveData.height <= 0 ||
+                saveData.cells == null)
+            {
+                throw new ArgumentException("Invalid map save data.");
+            }
+
+            Width = saveData.width;
+            Height = saveData.height;
+            Cells = new HexCell[Width * Height];
+
+            for (int y = 0; y < Height; y++)
+            {
+                for (int x = 0; x < Width; x++)
+                {
+                    int index = y * Width + x;
+                    HexCell source = index < saveData.cells.Length
+                        ? saveData.cells[index]
+                        : null;
+
+                    var cell = new HexCell(x, y);
+                    if (source != null)
+                    {
+                        cell.terrainId = string.IsNullOrEmpty(source.terrainId)
+                            ? "plain"
+                            : source.terrainId;
+                        cell.deployZoneFaction = source.deployZoneFaction;
+                        cell.infrastructureLevel = source.infrastructureLevel;
+                        cell.currentSupply = source.currentSupply;
+                    }
+                    Cells[index] = cell;
+                }
+            }
+        }
+
         public TerrainDefinition GetTerrainDefinition(string terrainId)
         {
             return terrainDefinitions.TryGetValue(terrainId, out TerrainDefinition definition)

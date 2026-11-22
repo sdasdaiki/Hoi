@@ -305,6 +305,9 @@ MonoBehaviour:
   tilemap: {fileID: 200000005}
   terrainDefinitions:
   - {fileID: 11400000, guid: c9dcee6a534946149a2438469908dd62, type: 2}
+  - {fileID: 11400000, guid: d3aab22c2de749845a9610f008657c55, type: 2}
+  - {fileID: 11400000, guid: 91c04a818716797499217b6569889f32, type: 2}
+  - {fileID: 11400000, guid: e05d72af9a0ba6a4e85cc68e835350fe, type: 2}
 --- !u!1 &519420028
 GameObject:
   m_ObjectHideFlags: 0

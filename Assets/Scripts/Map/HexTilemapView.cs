@@ -107,6 +107,46 @@ namespace EdoStrategy.Map
             }
         }
 
+        public void RefreshAllTilesPublic()
+        {
+            RefreshAllTiles();
+        }
+
+        public void LoadMap(MapSaveData saveData)
+        {
+            if (saveData == null)
+            {
+                return;
+            }
+
+            Grid.ApplyMapSaveData(saveData);
+            RefreshAllTiles();
+        }
+
+        public MapSaveData CreateSaveData(string mapName)
+        {
+            var saveData = new MapSaveData
+            {
+                mapName = mapName,
+                width = Grid.Width,
+                height = Grid.Height,
+                cells = new HexCell[Grid.Cells.Length]
+            };
+
+            for (int i = 0; i < Grid.Cells.Length; i++)
+            {
+                HexCell source = Grid.Cells[i];
+                saveData.cells[i] = new HexCell(source.x, source.y)
+                {
+                    terrainId = source.terrainId,
+                    deployZoneFaction = source.deployZoneFaction,
+                    infrastructureLevel = source.infrastructureLevel,
+                    currentSupply = source.currentSupply
+                };
+            }
+            return saveData;
+        }
+
         private void OnCellChanged(HexGrid grid, HexCell cell)
         {
             PaintCell(cell);
