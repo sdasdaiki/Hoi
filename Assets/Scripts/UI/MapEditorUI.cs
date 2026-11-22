@@ -28,6 +28,14 @@ namespace EdoStrategy.UI
             }
         }
 
+        public void ActivateMapNameInput()
+        {
+            if (mapNameInput != null)
+            {
+                mapNameInput.ActivateInputField();
+            }
+        }
+
         public void SetPlainBrush() { SetTerrainBrush("plain"); }
         public void SetForestBrush() { SetTerrainBrush("forest"); }
         public void SetMountainBrush() { SetTerrainBrush("mountain"); }
