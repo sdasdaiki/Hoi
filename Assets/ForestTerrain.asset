@@ -12,8 +12,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 5f3c9de7619b4f4f9f21c7d7df5dbb40, type: 3}
   m_Name: ForestTerrain
   m_EditorClassIdentifier: 
-  terrainId: plain
-  displayName: "\u5E73\u5730"
+  terrainId: forest
+  displayName: "\u68EE"
   tileAsset: {fileID: 11400000, guid: 91cbadca0e81e694a8f57188f51ec091, type: 2}
   baseMoveCost: 1
   defenseMultiplier: 1000
