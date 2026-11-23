@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using EdoStrategy.Command;
 using EdoStrategy.Core;
+using UnityEngine;
 
 namespace EdoStrategy.Units
 {
@@ -23,6 +24,7 @@ namespace EdoStrategy.Units
         public bool hasPlannedMove;
         public int plannedMoveX;
         public int plannedMoveY;
+        public List<Vector2Int> plannedPath = new List<Vector2Int>();
 
         public List<Order> pendingOrders = new List<Order>();
 

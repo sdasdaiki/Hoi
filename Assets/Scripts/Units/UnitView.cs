@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using EdoStrategy.Core;
 using EdoStrategy.Map;
 using UnityEngine;
@@ -16,6 +17,8 @@ namespace EdoStrategy.Units
         private SpriteRenderer factionBadge;
         private TextMesh label;
         private SpriteRenderer plannedMoveMarker;
+        private LineRenderer plannedArrowLine;
+        private SpriteRenderer plannedArrowHead;
         private Vector3 targetWorldPosition;
 
         public UnitData UnitData
@@ -134,6 +137,155 @@ namespace EdoStrategy.Units
             {
                 plannedMoveMarker.enabled = false;
             }
+            SetArrowVisible(false);
+        }
+
+        public void SetArrowVisible(bool visible)
+        {
+            if (visible && unitData != null && unitData.hasPlannedMove)
+            {
+                EnsurePlannedArrow();
+                if (plannedArrowLine != null)
+                {
+                    plannedArrowLine.enabled = true;
+                }
+                if (plannedArrowHead != null)
+                {
+                    plannedArrowHead.enabled = true;
+                }
+                UpdatePlannedArrow();
+            }
+            else
+            {
+                if (plannedArrowLine != null)
+                {
+                    plannedArrowLine.enabled = false;
+                }
+                if (plannedArrowHead != null)
+                {
+                    plannedArrowHead.enabled = false;
+                }
+            }
+        }
+
+        private void EnsurePlannedArrow()
+        {
+            if (plannedArrowLine == null)
+            {
+                GameObject lineObject =
+                    new GameObject("PlannedArrowLine");
+                lineObject.transform.SetParent(
+                    tilemap != null ? tilemap.transform : transform,
+                    false);
+                plannedArrowLine =
+                    lineObject.AddComponent<LineRenderer>();
+                plannedArrowLine.positionCount = 0;
+                plannedArrowLine.startWidth = 0.08f;
+                plannedArrowLine.endWidth = 0.08f;
+                plannedArrowLine.material =
+                    new Material(Shader.Find("Sprites/Default"));
+                plannedArrowLine.startColor =
+                    new Color(1f, 0.85f, 0.15f, 0.9f);
+                plannedArrowLine.endColor =
+                    new Color(1f, 0.85f, 0.15f, 0.9f);
+                plannedArrowLine.sortingOrder = 12;
+            }
+
+            if (plannedArrowHead == null)
+            {
+                GameObject headObject =
+                    new GameObject("PlannedArrowHead");
+                headObject.transform.SetParent(
+                    tilemap != null ? tilemap.transform : transform,
+                    false);
+                plannedArrowHead =
+                    headObject.AddComponent<SpriteRenderer>();
+                plannedArrowHead.sprite = CreateTriangleSprite();
+                plannedArrowHead.color =
+                    new Color(1f, 0.85f, 0.15f, 0.95f);
+                plannedArrowHead.sortingOrder = 13;
+                headObject.transform.localScale =
+                    new Vector3(0.25f, 0.25f, 1f);
+            }
+        }
+
+        private void UpdatePlannedArrow()
+        {
+            if (plannedArrowLine == null ||
+                unitData == null ||
+                unitData.plannedPath == null ||
+                unitData.plannedPath.Count < 1)
+            {
+                return;
+            }
+
+            System.Collections.Generic.List<Vector2Int> path =
+                unitData.plannedPath;
+            Vector3[] points = new Vector3[path.Count];
+            for (int i = 0; i < path.Count; i++)
+            {
+                points[i] = tilemap != null
+                    ? tilemap.GetCellCenterWorld(
+                        new Vector3Int(path[i].x, path[i].y, 0))
+                    : new Vector3(path[i].x, path[i].y, 0f);
+                points[i].z = -0.2f;
+            }
+
+            plannedArrowLine.positionCount = points.Length;
+            plannedArrowLine.SetPositions(points);
+
+            if (plannedArrowHead == null || points.Length < 2)
+            {
+                return;
+            }
+
+            Vector3 direction =
+                points[points.Length - 1] - points[points.Length - 2];
+            plannedArrowHead.transform.position =
+                points[points.Length - 1];
+            if (direction.sqrMagnitude > 0.0001f)
+            {
+                float angle = Mathf.Atan2(direction.y, direction.x) *
+                              Mathf.Rad2Deg - 90f;
+                plannedArrowHead.transform.rotation =
+                    Quaternion.Euler(0f, 0f, angle);
+            }
+        }
+
+        private static Sprite CreateTriangleSprite()
+        {
+            const int size = 32;
+            var texture =
+                new Texture2D(size, size, TextureFormat.RGBA32, false);
+            var pixels = new Color32[size * size];
+
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    float upper = size - y - 1;
+                    float halfWidth =
+                        Mathf.Clamp((upper / (size - 1f)) * size * 0.5f,
+                            0f,
+                            size * 0.5f);
+                    float center = (size - 1) * 0.5f;
+                    bool inside =
+                        y < size - 2 &&
+                        Mathf.Abs(x - center) <= halfWidth;
+                    pixels[y * size + x] = inside
+                        ? new Color32(255, 255, 255, 255)
+                        : new Color32(255, 255, 255, 0);
+                }
+            }
+
+            texture.SetPixels32(pixels);
+            texture.Apply();
+            texture.hideFlags = HideFlags.DontSave;
+            return Sprite.Create(
+                texture,
+                new Rect(0f, 0f, size, size),
+                new Vector2(0.5f, 0.5f),
+                size);
         }
 
         private void EnsureFactionBadge()

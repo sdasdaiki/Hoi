@@ -188,6 +188,7 @@ namespace EdoStrategy.Core
                             unit.plannedMoveX,
                             unit.plannedMoveY));
                     unit.hasPlannedMove = false;
+                    unit.plannedPath.Clear();
                     continue;
                 }
 
@@ -243,6 +244,7 @@ namespace EdoStrategy.Core
 
                 unit.remainingMovePoints -= consumedMoveCost;
                 unit.hasPlannedMove = false;
+                unit.plannedPath.Clear();
                 Debug.Log(
                     string.Format(
                         "予定移動実行: ({0},{1}) -> ({2},{3}), 消費コスト={4}, 残り移動力={5}",
@@ -278,6 +280,7 @@ namespace EdoStrategy.Core
                 unit.hasPlannedMove = false;
                 unit.plannedMoveX = unit.x;
                 unit.plannedMoveY = unit.y;
+                unit.plannedPath.Clear();
             }
         }
 
@@ -461,6 +464,7 @@ namespace EdoStrategy.Core
             if (unit.x == targetX && unit.y == targetY)
             {
                 unit.hasPlannedMove = false;
+                unit.plannedPath.Clear();
                 Debug.Log(
                     string.Format(
                         "移動予定キャンセル: ({0},{1})",
@@ -558,6 +562,8 @@ namespace EdoStrategy.Core
             unit.hasPlannedMove = true;
             unit.plannedMoveX = targetX;
             unit.plannedMoveY = targetY;
+            unit.plannedPath.Clear();
+            unit.plannedPath.AddRange(path);
             Debug.Log(
                 string.Format(
                     "移動予約: ({0},{1}) -> ({2},{3}), 必要コスト={4}",
@@ -586,6 +592,19 @@ namespace EdoStrategy.Core
                 battleCamera.ScreenToWorldPoint(
                     new Vector3(screenPosition.x, screenPosition.y, battleCamera.nearClipPlane));
             Vector3Int cellPosition = tilemap.WorldToCell(worldPosition);
+
+            foreach (UnitData plannedUnit in unitManager.Units)
+            {
+                if (plannedUnit != null &&
+                    plannedUnit.faction == Faction.Player &&
+                    plannedUnit.hasPlannedMove &&
+                    plannedUnit.plannedMoveX == cellPosition.x &&
+                    plannedUnit.plannedMoveY == cellPosition.y)
+                {
+                    SelectUnit(plannedUnit);
+                    return;
+                }
+            }
 
             UnitData clickedUnit =
                 unitManager.GetUnitAt(cellPosition.x, cellPosition.y);

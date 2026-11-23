@@ -16,6 +16,9 @@ namespace EdoStrategy.Units
         private UnitManager unitManager;
         private readonly Dictionary<UnitData, UnitView> views =
             new Dictionary<UnitData, UnitView>();
+        private TurnManager turnManager;
+
+        public bool ShowAllPlannedArrows { get; private set; }
 
         public UnitManager UnitManager
         {
@@ -57,6 +60,44 @@ namespace EdoStrategy.Units
         {
             UnitView view;
             return unit != null && views.TryGetValue(unit, out view) ? view : null;
+        }
+
+        public void ToggleAllPlannedArrows()
+        {
+            ShowAllPlannedArrows = !ShowAllPlannedArrows;
+            RefreshPlannedArrows();
+        }
+
+        private void Update()
+        {
+            if (turnManager == null)
+            {
+                turnManager = FindObjectOfType<TurnManager>();
+            }
+            RefreshPlannedArrows();
+        }
+
+        private void RefreshPlannedArrows()
+        {
+            UnitData selectedUnit =
+                turnManager != null ? turnManager.SelectedUnit : null;
+
+            foreach (KeyValuePair<UnitData, UnitView> entry in views)
+            {
+                UnitData unit = entry.Key;
+                UnitView view = entry.Value;
+                if (unit == null || view == null)
+                {
+                    continue;
+                }
+
+                bool visible =
+                    unit.faction == Faction.Player &&
+                    unit.hasPlannedMove &&
+                    (ShowAllPlannedArrows ||
+                     unit == selectedUnit);
+                view.SetArrowVisible(visible);
+            }
         }
 
         private void ResolveReferences()

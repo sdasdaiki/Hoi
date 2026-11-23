@@ -9,16 +9,23 @@ namespace EdoStrategy.UI
     public class BattleUI : MonoBehaviour
     {
         [SerializeField] private TurnManager turnManager;
+        [SerializeField] private UnitBoardView unitBoardView;
 
         private TextMeshProUGUI statusLabel;
         private Button startBattleButton;
         private Button endTurnButton;
+        private Button plannedArrowToggleButton;
+        private TextMeshProUGUI plannedArrowToggleLabel;
 
         private void Awake()
         {
             if (turnManager == null)
             {
                 turnManager = FindObjectOfType<TurnManager>();
+            }
+            if (unitBoardView == null)
+            {
+                unitBoardView = FindObjectOfType<UnitBoardView>();
             }
         }
 
@@ -43,6 +50,10 @@ namespace EdoStrategy.UI
                 {
                     return;
                 }
+            }
+            if (unitBoardView == null)
+            {
+                unitBoardView = FindObjectOfType<UnitBoardView>();
             }
 
             RefreshUi();
@@ -80,6 +91,15 @@ namespace EdoStrategy.UI
             {
                 endTurnButton.gameObject.SetActive(
                     turnManager.State == BattleState.PlayerCommandPhase);
+            }
+            if (plannedArrowToggleLabel != null)
+            {
+                bool showAll =
+                    unitBoardView != null &&
+                    unitBoardView.ShowAllPlannedArrows;
+                plannedArrowToggleLabel.text = showAll
+                    ? "移動矢印: 全表示"
+                    : "移動矢印: 個別";
             }
         }
 
@@ -143,6 +163,16 @@ namespace EdoStrategy.UI
                 font,
                 -55f,
                 OnEndTurn);
+            plannedArrowToggleButton = CreateButton(
+                "Planned Arrow Toggle",
+                "移動矢印: 個別",
+                buttonRect,
+                font,
+                -110f,
+                OnTogglePlannedArrows);
+            plannedArrowToggleLabel =
+                plannedArrowToggleButton
+                    .GetComponentInChildren<TextMeshProUGUI>();
         }
 
         private TMP_FontAsset LoadMeiryoFont()
@@ -256,6 +286,19 @@ namespace EdoStrategy.UI
             {
                 turnManager.EndPlayerCommandPhase();
             }
+        }
+
+        private void OnTogglePlannedArrows()
+        {
+            if (unitBoardView == null)
+            {
+                unitBoardView = FindObjectOfType<UnitBoardView>();
+            }
+            if (unitBoardView != null)
+            {
+                unitBoardView.ToggleAllPlannedArrows();
+            }
+            RefreshUi();
         }
 
         private static void EnsureEventSystem()
