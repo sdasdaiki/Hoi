@@ -187,121 +187,116 @@ namespace EdoStrategy.Core
                 return;
             }
 
-            var planningUnits = new List<UnitData>(unitManager.Units.Count);
-            foreach (UnitData unit in unitManager.Units)
-            {
-                if (unit != null &&
-                    unit.IsAlive &&
-                    HasMoveOrder(unit, out Order moveOrder))
-                {
-                    planningUnits.Add(unit);
-                }
-            }
+            ResolveReciprocalMoveOrders();
 
-            foreach (UnitData unit in planningUnits)
+            for (int pass = 0; pass <= unitManager.Units.Count; pass++)
             {
-                if (!HasMoveOrder(unit, out Order moveOrder))
-                {
-                    continue;
-                }
-                UnitDefinition definition =
-                    gameManager != null
-                        ? gameManager.GetUnitDefinition(GetUnitTypeId(unit))
-                        : null;
+                bool anyMoved = false;
 
-                HexGrid grid = mapView.Grid;
-                List<Vector2Int> path =
-                    moveOrder.path != null
-                        ? moveOrder.path
-                        : new List<Vector2Int>();
-                if (path.Count < 2)
+                foreach (UnitData unit in new List<UnitData>(unitManager.Units))
                 {
-                    Debug.LogWarning(
-                        "予定移動失敗: 保存された経路がありません");
+                    if (!unit.IsAlive ||
+                        !HasMoveOrder(unit, out Order moveOrder))
+                    {
+                        continue;
+                    }
+                    if (moveOrder.remainingDelayTurns != 0)
+                    {
+                        continue;
+                    }
+
+                    UnitDefinition definition =
+                        gameManager != null
+                            ? gameManager.GetUnitDefinition(GetUnitTypeId(unit))
+                            : null;
+                    HexGrid grid = mapView.Grid;
+                    List<Vector2Int> path =
+                        moveOrder.path != null
+                            ? moveOrder.path
+                            : new List<Vector2Int>();
+                    if (path.Count < 2)
+                    {
+                        unit.pendingOrders.Remove(moveOrder);
+                        OnCommandStateChanged?.Invoke();
+                        continue;
+                    }
+
+                    int consumedMoveCost = 0;
+                    int fromX = unit.x;
+                    int fromY = unit.y;
+                    bool movedThisPass = false;
+
+                    for (int i = 1; i < path.Count; i++)
+                    {
+                        Vector2Int step = path[i];
+                        UnitData occupant = unitManager.GetUnitAt(step.x, step.y);
+                        if (occupant != null)
+                        {
+                            if (occupant.faction == unit.faction)
+                            {
+                                HexCell friendlyPassCell = grid.GetCell(step.x, step.y);
+                                TerrainDefinition friendlyPassTerrain =
+                                    grid.GetTerrainDefinition(friendlyPassCell.terrainId);
+                                int friendlyPassCost = definition != null
+                                    ? definition.GetMoveCost(friendlyPassTerrain)
+                                    : grid.GetMoveCost(step.x, step.y);
+                                if (friendlyPassCost < 0 ||
+                                    consumedMoveCost + friendlyPassCost >
+                                        unit.remainingMovePoints)
+                                {
+                                    break;
+                                }
+                                consumedMoveCost += friendlyPassCost;
+                                continue;
+                            }
+                            break;
+                        }
+
+                        HexCell cell = grid.GetCell(step.x, step.y);
+                        TerrainDefinition terrain =
+                            grid.GetTerrainDefinition(cell.terrainId);
+                        int moveCost = definition != null
+                            ? definition.GetMoveCost(terrain)
+                            : grid.GetMoveCost(step.x, step.y);
+                        if (moveCost < 0 ||
+                            consumedMoveCost + moveCost >
+                                unit.remainingMovePoints)
+                        {
+                            break;
+                        }
+
+                        if (!unitManager.MoveUnit(unit, step.x, step.y))
+                        {
+                            break;
+                        }
+                        consumedMoveCost += moveCost;
+                        movedThisPass = true;
+                        anyMoved = true;
+                    }
+
+                    unit.remainingMovePoints -= consumedMoveCost;
+                    if (!movedThisPass)
+                    {
+                        continue;
+                    }
+
                     unit.pendingOrders.Remove(moveOrder);
                     OnCommandStateChanged?.Invoke();
-                    continue;
+                    Debug.Log(
+                        string.Format(
+                            "予定移動実行: ({0},{1}) -> ({2},{3}), 消費コスト={4}, 残り移動力={5}",
+                            fromX,
+                            fromY,
+                            unit.x,
+                            unit.y,
+                            consumedMoveCost,
+                            unit.remainingMovePoints));
                 }
 
-                int consumedMoveCost = 0;
-                int fromX = unit.x;
-                int fromY = unit.y;
-
-                for (int i = 1; i < path.Count; i++)
+                if (!anyMoved)
                 {
-                    Vector2Int step = path[i];
-                    UnitData occupant = unitManager.GetUnitAt(step.x, step.y);
-                    if (occupant != null)
-                    {
-                        if (occupant.faction == unit.faction)
-                        {
-                            HexCell friendlyPassCell = grid.GetCell(step.x, step.y);
-                            TerrainDefinition friendlyPassTerrain =
-                                grid.GetTerrainDefinition(friendlyPassCell.terrainId);
-                            int friendlyPassCost = definition != null
-                                ? definition.GetMoveCost(friendlyPassTerrain)
-                                : grid.GetMoveCost(step.x, step.y);
-                            if (friendlyPassCost < 0 ||
-                                consumedMoveCost + friendlyPassCost >
-                                    unit.remainingMovePoints)
-                            {
-                                break;
-                            }
-                            consumedMoveCost += friendlyPassCost;
-                            continue;
-                        }
-                        Debug.LogWarning(
-                            string.Format(
-                                "予定移動中断: マスが占有されています ({0},{1})",
-                                step.x,
-                                step.y));
-                        break;
-                    }
-
-                    HexCell cell = grid.GetCell(step.x, step.y);
-                    TerrainDefinition terrain =
-                        grid.GetTerrainDefinition(cell.terrainId);
-                    int moveCost = definition != null
-                        ? definition.GetMoveCost(terrain)
-                        : grid.GetMoveCost(step.x, step.y);
-                    if (moveCost < 0)
-                    {
-                        Debug.LogWarning(
-                            string.Format(
-                                "予定移動中断: 進入不可の地形 ({0},{1})",
-                                step.x,
-                                step.y));
-                        break;
-                    }
-                    if (consumedMoveCost + moveCost > unit.remainingMovePoints)
-                    {
-                        Debug.LogWarning(
-                            string.Format(
-                                "予定移動中断: 移動コスト超過 必要={0}, 残り={1}",
-                                consumedMoveCost + moveCost,
-                                unit.remainingMovePoints));
-                        break;
-                    }
-
-                    if (!unitManager.MoveUnit(unit, step.x, step.y))
-                    {
-                        break;
-                    }
-                    consumedMoveCost += moveCost;
+                    break;
                 }
-
-                unit.remainingMovePoints -= consumedMoveCost;
-                unit.pendingOrders.Remove(moveOrder);
-                OnCommandStateChanged?.Invoke();
-                Debug.Log(
-                    string.Format(
-                        "予定移動実行: ({0},{1}) -> ({2},{3}), 消費コスト={4}, 残り移動力={5}",
-                        fromX,
-                        fromY,
-                        unit.x,
-                        unit.y,
-                        consumedMoveCost,
-                        unit.remainingMovePoints));
             }
         }
 
@@ -508,8 +503,9 @@ namespace EdoStrategy.Core
 
             if (unit.x == targetX && unit.y == targetY)
             {
-                ClearMoveOrders(unit);
-                OnCommandStateChanged?.Invoke();
+                int oldX = unit.x;
+                int oldY = unit.y;
+                CancelMoveOrdersAndDependents(unit);
                 Debug.Log(
                     string.Format(
                         "移動予定キャンセル: ({0},{1})",
@@ -534,15 +530,19 @@ namespace EdoStrategy.Core
             UnitData occupant = unitManager.GetUnitAt(targetX, targetY);
             if (occupant != null)
             {
-                Debug.LogWarning(
-                    string.Format(
-                        "移動失敗: 他のユニットが占有中 ({0},{1}) -> ({2},{3}), 残り移動力={4}",
-                        unit.x,
-                        unit.y,
-                        targetX,
-                        targetY,
-                        unit.remainingMovePoints));
-                return false;
+                if (occupant.faction != unit.faction ||
+                    !HexGrid.HasImmediateMoveOrder(occupant))
+                {
+                    Debug.LogWarning(
+                        string.Format(
+                            "移動失敗: 他のユニットが占有中 ({0},{1}) -> ({2},{3}), 残り移動力={4}",
+                            unit.x,
+                            unit.y,
+                            targetX,
+                            targetY,
+                            unit.remainingMovePoints));
+                    return false;
+                }
             }
 
             List<Vector2Int> path =
@@ -619,6 +619,7 @@ namespace EdoStrategy.Core
                     continue;
                 }
                 if (HasMoveOrder(otherUnit, out Order otherMove) &&
+                    otherMove.remainingDelayTurns == 0 &&
                     otherMove.targetX == targetX &&
                     otherMove.targetY == targetY)
                 {
@@ -669,31 +670,83 @@ namespace EdoStrategy.Core
                     new Vector3(screenPosition.x, screenPosition.y, battleCamera.nearClipPlane));
             Vector3Int cellPosition = tilemap.WorldToCell(worldPosition);
 
-            foreach (UnitData plannedUnit in unitManager.Units)
-            {
-                if (plannedUnit != null &&
-                    plannedUnit.faction == Faction.Player &&
-                    HasMoveOrder(plannedUnit, out Order plannedMove) &&
-                    plannedMove.targetX == cellPosition.x &&
-                    plannedMove.targetY == cellPosition.y)
-                {
-                    SelectUnit(plannedUnit);
-                    return;
-                }
-            }
-
             UnitData clickedUnit =
                 unitManager.GetUnitAt(cellPosition.x, cellPosition.y);
             if (clickedUnit != null)
             {
                 if (clickedUnit.faction == Faction.Player)
                 {
+                    if (clickedUnit == selectedUnit)
+                    {
+                        TryMoveSelectedUnit(
+                            cellPosition.x,
+                            cellPosition.y);
+                        return;
+                    }
+
+                    if (selectedUnit != null &&
+                        IsInSelectedUnitReachableCells(
+                            cellPosition.x,
+                            cellPosition.y))
+                    {
+                        TryMoveSelectedUnit(
+                            cellPosition.x,
+                            cellPosition.y);
+                        return;
+                    }
+
                     SelectUnit(clickedUnit);
                 }
                 return;
             }
 
-            TryMoveSelectedUnit(cellPosition.x, cellPosition.y);
+            if (selectedUnit != null &&
+                !TryMoveSelectedUnit(
+                    cellPosition.x,
+                    cellPosition.y))
+            {
+                SelectUnit(null);
+            }
+        }
+
+        private bool IsInSelectedUnitReachableCells(int x, int y)
+        {
+            if (selectedUnit == null ||
+                mapView == null ||
+                mapView.Grid == null)
+            {
+                return false;
+            }
+
+            UnitDefinition definition =
+                gameManager != null
+                    ? gameManager.GetUnitDefinition(
+                        GetUnitTypeId(selectedUnit))
+                    : null;
+            int movePoints =
+                definition != null ? definition.movePoints : 0;
+            if (movePoints <= 0)
+            {
+                return false;
+            }
+
+            List<Vector2Int> reachable =
+                mapView.Grid.GetReachableCells(
+                    selectedUnit.x,
+                    selectedUnit.y,
+                    movePoints,
+                    Faction.Player,
+                    definition,
+                    unitManager);
+            for (int i = 0; i < reachable.Count; i++)
+            {
+                if (reachable[i].x == x &&
+                    reachable[i].y == y)
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         public bool HasMoveOrder(UnitData unit, out Order moveOrder)
@@ -704,14 +757,16 @@ namespace EdoStrategy.Core
                 return false;
             }
 
-            for (int i = 0; i < unit.pendingOrders.Count; i++)
+            if (unit.pendingOrders.Count == 0)
             {
-                Order order = unit.pendingOrders[i];
-                if (order != null && order.orderType == OrderType.Move)
-                {
-                    moveOrder = order;
-                    return true;
-                }
+                return false;
+            }
+
+            Order order = unit.pendingOrders[0];
+            if (order != null && order.orderType == OrderType.Move)
+            {
+                moveOrder = order;
+                return true;
             }
             return false;
         }
@@ -729,6 +784,175 @@ namespace EdoStrategy.Core
                 if (order != null && order.orderType == OrderType.Move)
                 {
                     unit.pendingOrders.RemoveAt(i);
+                }
+            }
+        }
+
+        private void CancelMoveOrdersAndDependents(UnitData cancelledUnit)
+        {
+            var freedPositions = new List<Vector2Int>();
+            if (cancelledUnit != null)
+            {
+                freedPositions.Add(new Vector2Int(cancelledUnit.x, cancelledUnit.y));
+            }
+
+            for (int pass = 0; pass <= unitManager.Units.Count; pass++)
+            {
+                bool cancelledAny = false;
+                foreach (UnitData unit in unitManager.Units)
+                {
+                    if (unit == null)
+                    {
+                        continue;
+                    }
+
+                    if (HasMoveOrder(unit, out Order moveOrder))
+                    {
+                        bool targetsFreedPosition = false;
+                        for (int i = 0; i < freedPositions.Count; i++)
+                        {
+                            if (moveOrder.targetX == freedPositions[i].x &&
+                                moveOrder.targetY == freedPositions[i].y)
+                            {
+                                targetsFreedPosition = true;
+                                break;
+                            }
+                        }
+
+                        if (targetsFreedPosition)
+                        {
+                            ClearMoveOrders(unit);
+                            if (!freedPositions.Contains(
+                                new Vector2Int(unit.x, unit.y)))
+                            {
+                                freedPositions.Add(
+                                    new Vector2Int(unit.x, unit.y));
+                            }
+                            cancelledAny = true;
+                            OnCommandStateChanged?.Invoke();
+                        }
+                    }
+                }
+
+                if (!cancelledAny)
+                {
+                    break;
+                }
+            }
+
+            if (cancelledUnit != null)
+            {
+                ClearMoveOrders(cancelledUnit);
+            }
+            OnCommandStateChanged?.Invoke();
+        }
+
+        private void ResolveReciprocalMoveOrders()
+        {
+            if (unitManager == null)
+            {
+                return;
+            }
+
+            var pendingUnits = new List<UnitData>();
+            foreach (UnitData unit in unitManager.Units)
+            {
+                if (unit != null &&
+                    unit.IsAlive &&
+                    HasMoveOrder(unit, out Order moveOrder) &&
+                    moveOrder.remainingDelayTurns == 0)
+                {
+                    pendingUnits.Add(unit);
+                }
+            }
+
+            var resolved = new bool[pendingUnits.Count];
+            for (int start = 0; start < pendingUnits.Count; start++)
+            {
+                if (resolved[start])
+                {
+                    continue;
+                }
+
+                var cycle = new List<int>();
+                var cyclePosition = new int[pendingUnits.Count];
+                for (int i = 0; i < cyclePosition.Length; i++)
+                {
+                    cyclePosition[i] = -1;
+                }
+
+                int current = start;
+                while (current >= 0 &&
+                       !resolved[current] &&
+                       cyclePosition[current] < 0)
+                {
+                    cyclePosition[current] = cycle.Count;
+                    cycle.Add(current);
+
+                    UnitData currentUnit = pendingUnits[current];
+                    if (!HasMoveOrder(currentUnit, out Order currentMove))
+                    {
+                        current = -1;
+                        break;
+                    }
+
+                    current = -1;
+                    for (int next = 0; next < pendingUnits.Count; next++)
+                    {
+                        UnitData candidate = pendingUnits[next];
+                        if (candidate.x == currentMove.targetX &&
+                            candidate.y == currentMove.targetY)
+                        {
+                            current = next;
+                            break;
+                        }
+                    }
+                }
+
+                if (current >= 0 &&
+                    cyclePosition[current] >= 0 &&
+                    cycle.Count >= 2)
+                {
+                    var originalPositions =
+                        new Vector2Int[cycle.Count];
+                    var targetPositions =
+                        new Vector2Int[cycle.Count];
+                    for (int i = 0; i < cycle.Count; i++)
+                    {
+                        UnitData unit = pendingUnits[cycle[i]];
+                        originalPositions[i] =
+                            new Vector2Int(unit.x, unit.y);
+                        HasMoveOrder(unit, out Order moveOrder);
+                        targetPositions[i] =
+                            new Vector2Int(moveOrder.targetX, moveOrder.targetY);
+                    }
+
+                    bool isClosedCycle = true;
+                    for (int i = 0; i < cycle.Count; i++)
+                    {
+                        if (targetPositions[i] !=
+                            originalPositions[(i + 1) % cycle.Count])
+                        {
+                            isClosedCycle = false;
+                            break;
+                        }
+                    }
+
+                    if (isClosedCycle)
+                    {
+                        for (int i = 0; i < cycle.Count; i++)
+                        {
+                            UnitData unit = pendingUnits[cycle[i]];
+                            unit.x = targetPositions[i].x;
+                            unit.y = targetPositions[i].y;
+                            unit.remainingMovePoints = 0;
+                            HasMoveOrder(unit, out Order moveOrder);
+                            unit.pendingOrders.Remove(moveOrder);
+                            unitManager.NotifyUnitMoved(unit);
+                            resolved[cycle[i]] = true;
+                        }
+                        OnCommandStateChanged?.Invoke();
+                    }
                 }
             }
         }

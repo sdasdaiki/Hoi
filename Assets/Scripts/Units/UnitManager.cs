@@ -197,5 +197,13 @@ namespace EdoStrategy.Units
         {
             return TryMoveUnit(unit, targetX, targetY, definition);
         }
+
+        public void NotifyUnitMoved(UnitData unit)
+        {
+            if (unit != null)
+            {
+                UnitMoved?.Invoke(unit);
+            }
+        }
     }
 }

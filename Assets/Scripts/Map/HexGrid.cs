@@ -151,6 +151,21 @@ namespace EdoStrategy.Map
             return neighbors;
         }
 
+        public static bool HasImmediateMoveOrder(UnitData unit)
+        {
+            if (unit == null || unit.pendingOrders == null ||
+                unit.pendingOrders.Count == 0)
+            {
+                return false;
+            }
+
+            Order order = unit.pendingOrders[0];
+            return order != null &&
+                   order.orderType == OrderType.Move &&
+                   order.remainingDelayTurns == 0 &&
+                   (order.targetX != unit.x || order.targetY != unit.y);
+        }
+
         public List<Vector2Int> GetReachableCells(
             int startX,
             int startY,
@@ -244,39 +259,51 @@ namespace EdoStrategy.Map
                         unitManager != null
                             ? unitManager.GetUnitAt(x, y)
                             : null;
-                    if (occupant == null)
+                    bool canStop = occupant == null;
+                    if (occupant != null)
                     {
-                        bool reserved = false;
-                        if (unitManager != null)
+                        canStop = occupant.faction == movingFaction &&
+                                  HasImmediateMoveOrder(occupant);
+                    }
+
+                    if (!canStop)
+                    {
+                        continue;
+                    }
+
+                    bool reserved = false;
+                    if (unitManager != null)
+                    {
+                        foreach (UnitData unit in unitManager.Units)
                         {
-                            foreach (UnitData unit in unitManager.Units)
+                            if (unit == null ||
+                                unit.faction != movingFaction ||
+                                unit.x == x && unit.y == y)
                             {
-                                if (unit == null ||
-                                    unit.faction != movingFaction)
+                                continue;
+                            }
+                            if (unit.pendingOrders != null &&
+                                unit.pendingOrders.Count > 0)
+                            {
+                                Order order = unit.pendingOrders[0];
+                                if (order != null &&
+                                    order.orderType == OrderType.Move &&
+                                    order.remainingDelayTurns == 0 &&
+                                    order.targetX == x &&
+                                    order.targetY == y)
                                 {
-                                    continue;
-                                }
-                                foreach (Order order in unit.pendingOrders)
-                                {
-                                    if (order != null &&
-                                        order.orderType == OrderType.Move &&
-                                        order.targetX == x &&
-                                        order.targetY == y)
-                                    {
-                                        reserved = true;
-                                        break;
-                                    }
-                                }
-                                if (reserved)
-                                {
-                                    break;
+                                    reserved = true;
                                 }
                             }
+                            if (reserved)
+                            {
+                                break;
+                            }
                         }
-                        if (!reserved)
-                        {
-                            reachable.Add(new Vector2Int(x, y));
-                        }
+                    }
+                    if (!reserved)
+                    {
+                        reachable.Add(new Vector2Int(x, y));
                     }
                 }
             }
@@ -375,7 +402,14 @@ namespace EdoStrategy.Map
                     {
                         if (neighbor.x == goalX && neighbor.y == goalY)
                         {
-                            continue;
+                            bool isVacatingFriendly =
+                                movingFaction != Faction.None &&
+                                occupant.faction == movingFaction &&
+                                HasImmediateMoveOrder(occupant);
+                            if (!isVacatingFriendly)
+                            {
+                                continue;
+                            }
                         }
                         bool isFriendly =
                             movingFaction != Faction.None &&
