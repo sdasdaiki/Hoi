@@ -1,0 +1,27 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: caf3df3be390b56479051b0672a1ee27, type: 3}
+  m_Name: HeadquartersUnit
+  m_EditorClassIdentifier: 
+  unitTypeId: headquarters
+  displayName: "\u672C\u9663"
+  commandLevel: 2
+  unitPrefab: {fileID: 0}
+  maxManpower: 2000
+  baseAttack: 120
+  baseDefense: 250
+  breakthrough: 100
+  movePoints: 2
+  attackRange: 1
+  recon: 2
+  visionRange: 3
+  terrainCostOverrides: []

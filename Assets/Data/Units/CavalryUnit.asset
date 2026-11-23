@@ -1,0 +1,27 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: caf3df3be390b56479051b0672a1ee27, type: 3}
+  m_Name: CavalryUnit
+  m_EditorClassIdentifier: 
+  unitTypeId: cavalry
+  displayName: "\u9A0E\u5175"
+  commandLevel: 0
+  unitPrefab: {fileID: 0}
+  maxManpower: 2500
+  baseAttack: 480
+  baseDefense: 260
+  breakthrough: 600
+  movePoints: 5
+  attackRange: 1
+  recon: 3
+  visionRange: 4
+  terrainCostOverrides: []
