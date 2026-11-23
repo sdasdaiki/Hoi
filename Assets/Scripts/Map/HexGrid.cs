@@ -247,27 +247,30 @@ namespace EdoStrategy.Map
                     if (occupant == null)
                     {
                         bool reserved = false;
-                        foreach (UnitData unit in unitManager.Units)
+                        if (unitManager != null)
                         {
-                            if (unit == null ||
-                                unit.faction != movingFaction)
+                            foreach (UnitData unit in unitManager.Units)
                             {
-                                continue;
-                            }
-                            foreach (Order order in unit.pendingOrders)
-                            {
-                                if (order != null &&
-                                    order.orderType == OrderType.Move &&
-                                    order.targetX == x &&
-                                    order.targetY == y)
+                                if (unit == null ||
+                                    unit.faction != movingFaction)
                                 {
-                                    reserved = true;
+                                    continue;
+                                }
+                                foreach (Order order in unit.pendingOrders)
+                                {
+                                    if (order != null &&
+                                        order.orderType == OrderType.Move &&
+                                        order.targetX == x &&
+                                        order.targetY == y)
+                                    {
+                                        reserved = true;
+                                        break;
+                                    }
+                                }
+                                if (reserved)
+                                {
                                     break;
                                 }
-                            }
-                            if (reserved)
-                            {
-                                break;
                             }
                         }
                         if (!reserved)
@@ -370,12 +373,14 @@ namespace EdoStrategy.Map
                             : null;
                     if (occupant != null)
                     {
-                        bool allowPass =
+                        if (neighbor.x == goalX && neighbor.y == goalY)
+                        {
+                            continue;
+                        }
+                        bool isFriendly =
                             movingFaction != Faction.None &&
-                            occupant.faction == movingFaction &&
-                            neighbor.x != goalX &&
-                            neighbor.y != goalY;
-                        if (!allowPass)
+                            occupant.faction == movingFaction;
+                        if (!isFriendly)
                         {
                             continue;
                         }
