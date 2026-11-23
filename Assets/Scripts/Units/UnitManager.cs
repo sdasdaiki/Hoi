@@ -10,6 +10,7 @@ namespace EdoStrategy.Units
         private readonly HexGrid grid;
 
         public event Action<UnitData> UnitAdded;
+        public event Action<UnitData> UnitMoved;
         public event Action<UnitData> UnitRemoved;
 
         public IReadOnlyList<UnitData> Units
@@ -115,6 +116,7 @@ namespace EdoStrategy.Units
 
             unit.x = targetX;
             unit.y = targetY;
+            UnitMoved?.Invoke(unit);
             return true;
         }
 
