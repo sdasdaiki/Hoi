@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using EdoStrategy.Units;
 using UnityEngine;
 
 namespace EdoStrategy.Map
@@ -148,6 +149,98 @@ namespace EdoStrategy.Map
             return neighbors;
         }
 
+        public List<Vector2Int> GetReachableCells(
+            int startX,
+            int startY,
+            int movePoints,
+            UnitDefinition definition,
+            UnitManager unitManager)
+        {
+            var reachable = new List<Vector2Int>();
+            if (!IsInBounds(startX, startY) || movePoints <= 0)
+            {
+                return reachable;
+            }
+
+            int total = Width * Height;
+            var costs = new int[total];
+            var visited = new bool[total];
+            for (int i = 0; i < total; i++)
+            {
+                costs[i] = int.MaxValue;
+            }
+
+            var frontier = new List<ReachableNode>();
+            int startIndex = startY * Width + startX;
+            costs[startIndex] = 0;
+            frontier.Add(new ReachableNode(startIndex, 0));
+
+            while (frontier.Count > 0)
+            {
+                int bestPosition = 0;
+                for (int i = 1; i < frontier.Count; i++)
+                {
+                    if (frontier[i].Cost < frontier[bestPosition].Cost)
+                    {
+                        bestPosition = i;
+                    }
+                }
+
+                ReachableNode current = frontier[bestPosition];
+                frontier.RemoveAt(bestPosition);
+                if (visited[current.Index])
+                {
+                    continue;
+                }
+                visited[current.Index] = true;
+
+                int currentX = current.Index % Width;
+                int currentY = current.Index / Width;
+                foreach (Vector2Int neighbor in GetNeighbors(currentX, currentY))
+                {
+                    UnitData occupant =
+                        unitManager != null
+                            ? unitManager.GetUnitAt(neighbor.x, neighbor.y)
+                            : null;
+                    if (occupant != null)
+                    {
+                        continue;
+                    }
+
+                    HexCell cell = GetCell(neighbor.x, neighbor.y);
+                    TerrainDefinition terrain =
+                        GetTerrainDefinition(cell.terrainId);
+                    int moveCost = definition != null
+                        ? definition.GetMoveCost(terrain)
+                        : GetMoveCost(neighbor.x, neighbor.y);
+                    if (moveCost < 0)
+                    {
+                        continue;
+                    }
+
+                    int newCost = costs[current.Index] + moveCost;
+                    int neighborIndex = neighbor.y * Width + neighbor.x;
+                    if (newCost > movePoints || newCost >= costs[neighborIndex])
+                    {
+                        continue;
+                    }
+
+                    costs[neighborIndex] = newCost;
+                    frontier.Add(new ReachableNode(neighborIndex, newCost));
+                }
+            }
+
+            for (int i = 0; i < costs.Length; i++)
+            {
+                if (costs[i] != int.MaxValue && i != startIndex)
+                {
+                    reachable.Add(
+                        new Vector2Int(i % Width, i / Width));
+                }
+            }
+            return reachable;
+        }
+
         public List<Vector2Int> FindPath(int startX, int startY, int goalX, int goalY)
         {
             HexCell start = GetCell(startX, startY);
@@ -244,6 +337,18 @@ namespace EdoStrategy.Map
             {
                 Index = index;
                 Priority = priority;
+            }
+        }
+
+        private readonly struct ReachableNode
+        {
+            public readonly int Index;
+            public readonly int Cost;
+
+            public ReachableNode(int index, int cost)
+            {
+                Index = index;
+                Cost = cost;
             }
         }
     }

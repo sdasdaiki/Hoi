@@ -19,6 +19,7 @@ namespace EdoStrategy.Units
         private SpriteRenderer plannedMoveMarker;
         private LineRenderer plannedArrowLine;
         private SpriteRenderer plannedArrowHead;
+        private SpriteRenderer selectionRing;
         private Vector3 targetWorldPosition;
 
         public UnitData UnitData
@@ -359,6 +360,49 @@ namespace EdoStrategy.Units
         {
             MoveToTile(x, y);
             transform.position = targetWorldPosition;
+        }
+
+        public void SetSelected(bool isSelected)
+        {
+            if (selectionRing == null)
+            {
+                Transform ringTransform = transform.Find("SelectionRing");
+                if (ringTransform != null)
+                {
+                    selectionRing = ringTransform.GetComponent<SpriteRenderer>();
+                }
+            }
+
+            if (selectionRing == null)
+            {
+                GameObject ringObject = new GameObject("SelectionRing");
+                ringObject.transform.SetParent(transform, false);
+                ringObject.transform.localPosition =
+                    new Vector3(0f, -0.28f, 0.1f);
+                selectionRing =
+                    ringObject.AddComponent<SpriteRenderer>();
+                selectionRing.sprite = CreateCircleSprite();
+                selectionRing.sortingOrder = 7;
+            }
+
+            Vector3 parentScale = transform.localScale;
+            float compensationX =
+                Mathf.Abs(parentScale.x) > 0.0001f
+                    ? 0.85f / Mathf.Abs(parentScale.x)
+                    : 0.85f;
+            float compensationY =
+                Mathf.Abs(parentScale.y) > 0.0001f
+                    ? 0.85f / Mathf.Abs(parentScale.y)
+                    : 0.85f;
+            selectionRing.transform.localScale =
+                new Vector3(compensationX, compensationY, 1f);
+
+            selectionRing.enabled = isSelected;
+            if (isSelected)
+            {
+                selectionRing.color =
+                    new Color(1f, 0.95f, 0.25f, 0.95f);
+            }
         }
 
         public void Refresh()
