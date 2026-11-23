@@ -15,6 +15,7 @@ namespace EdoStrategy.Units
         private SpriteRenderer spriteRenderer;
         private SpriteRenderer factionBadge;
         private TextMesh label;
+        private SpriteRenderer plannedMoveMarker;
         private Vector3 targetWorldPosition;
 
         public UnitData UnitData
@@ -82,6 +83,57 @@ namespace EdoStrategy.Units
 
             RefreshLabel();
             MoveToTileImmediately(data.x, data.y);
+        }
+
+        private void EnsurePlannedMoveMarker()
+        {
+            if (plannedMoveMarker == null)
+            {
+                Transform markerTransform = transform.Find("PlannedMoveMarker");
+                if (markerTransform != null)
+                {
+                    plannedMoveMarker =
+                        markerTransform.GetComponent<SpriteRenderer>();
+                }
+            }
+
+            if (plannedMoveMarker == null)
+            {
+                GameObject markerObject =
+                    new GameObject("PlannedMoveMarker");
+                markerObject.transform.SetParent(tilemap != null
+                    ? tilemap.transform
+                    : transform, false);
+                plannedMoveMarker =
+                    markerObject.AddComponent<SpriteRenderer>();
+                plannedMoveMarker.sprite = CreateCircleSprite();
+                plannedMoveMarker.sortingOrder = 8;
+                markerObject.transform.localScale =
+                    new Vector3(0.55f, 0.55f, 1f);
+            }
+
+            plannedMoveMarker.enabled = true;
+            plannedMoveMarker.color =
+                new Color(1f, 0.95f, 0.25f, 0.45f);
+            Vector3 worldPosition = tilemap != null
+                ? tilemap.GetCellCenterWorld(
+                    new Vector3Int(
+                        unitData.plannedMoveX,
+                        unitData.plannedMoveY,
+                        0))
+                : new Vector3(
+                    unitData.plannedMoveX,
+                    unitData.plannedMoveY,
+                    0f);
+            plannedMoveMarker.transform.position = worldPosition;
+        }
+
+        private void ClearPlannedMoveMarker()
+        {
+            if (plannedMoveMarker != null)
+            {
+                plannedMoveMarker.enabled = false;
+            }
         }
 
         private void EnsureFactionBadge()
@@ -200,6 +252,15 @@ namespace EdoStrategy.Units
                 transform.position,
                 targetWorldPosition,
                 1f - Mathf.Exp(-moveSpeed * Time.deltaTime));
+
+            if (unitData != null && unitData.hasPlannedMove)
+            {
+                EnsurePlannedMoveMarker();
+            }
+            else
+            {
+                ClearPlannedMoveMarker();
+            }
         }
 
         private static Sprite CreateCircleSprite()

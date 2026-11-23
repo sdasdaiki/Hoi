@@ -137,6 +137,9 @@ namespace EdoStrategy.Core
         {
             yield return null;
 
+            ExecutePlannedMoves();
+            yield return null;
+
             State = BattleState.ReconAndReportPhase;
             yield return null;
 
@@ -147,6 +150,109 @@ namespace EdoStrategy.Core
             turnNumber++;
             ResetRemainingMovePoints();
             State = BattleState.PlayerCommandPhase;
+        }
+
+        private void ExecutePlannedMoves()
+        {
+            if (unitManager == null)
+            {
+                return;
+            }
+
+            var planningUnits = new List<UnitData>(unitManager.Units.Count);
+            foreach (UnitData unit in unitManager.Units)
+            {
+                if (unit != null && unit.IsAlive && unit.hasPlannedMove)
+                {
+                    planningUnits.Add(unit);
+                }
+            }
+
+            foreach (UnitData unit in planningUnits)
+            {
+                UnitDefinition definition =
+                    gameManager != null
+                        ? gameManager.GetUnitDefinition(GetUnitTypeId(unit))
+                        : null;
+
+                HexGrid grid = mapView.Grid;
+                List<Vector2Int> path =
+                    grid.FindPath(unit.x, unit.y, unit.plannedMoveX, unit.plannedMoveY);
+                if (path == null || path.Count < 2)
+                {
+                    Debug.LogWarning(
+                        string.Format(
+                            "予定移動失敗: 経路が見つからない ({0},{1}) -> ({2},{3})",
+                            unit.x,
+                            unit.y,
+                            unit.plannedMoveX,
+                            unit.plannedMoveY));
+                    unit.hasPlannedMove = false;
+                    continue;
+                }
+
+                int consumedMoveCost = 0;
+                int fromX = unit.x;
+                int fromY = unit.y;
+
+                for (int i = 1; i < path.Count; i++)
+                {
+                    Vector2Int step = path[i];
+                    UnitData occupant = unitManager.GetUnitAt(step.x, step.y);
+                    if (occupant != null)
+                    {
+                        Debug.LogWarning(
+                            string.Format(
+                                "予定移動中断: マスが占有されています ({0},{1})",
+                                step.x,
+                                step.y));
+                        break;
+                    }
+
+                    HexCell cell = grid.GetCell(step.x, step.y);
+                    TerrainDefinition terrain =
+                        grid.GetTerrainDefinition(cell.terrainId);
+                    int moveCost = definition != null
+                        ? definition.GetMoveCost(terrain)
+                        : grid.GetMoveCost(step.x, step.y);
+                    if (moveCost < 0)
+                    {
+                        Debug.LogWarning(
+                            string.Format(
+                                "予定移動中断: 進入不可の地形 ({0},{1})",
+                                step.x,
+                                step.y));
+                        break;
+                    }
+                    if (consumedMoveCost + moveCost > unit.remainingMovePoints)
+                    {
+                        Debug.LogWarning(
+                            string.Format(
+                                "予定移動中断: 移動コスト超過 必要={0}, 残り={1}",
+                                consumedMoveCost + moveCost,
+                                unit.remainingMovePoints));
+                        break;
+                    }
+
+                    if (!unitManager.MoveUnit(unit, step.x, step.y))
+                    {
+                        break;
+                    }
+                    consumedMoveCost += moveCost;
+                }
+
+                unit.remainingMovePoints -= consumedMoveCost;
+                unit.hasPlannedMove = false;
+                Debug.Log(
+                    string.Format(
+                        "予定移動実行: ({0},{1}) -> ({2},{3}), 消費コスト={4}, 残り移動力={5}",
+                        fromX,
+                        fromY,
+                        unit.x,
+                        unit.y,
+                        consumedMoveCost,
+                        unit.remainingMovePoints));
+            }
         }
 
         private void ResetRemainingMovePoints()
@@ -169,6 +275,9 @@ namespace EdoStrategy.Core
                         : null;
                 unit.remainingMovePoints =
                     definition != null ? definition.movePoints : 0;
+                unit.hasPlannedMove = false;
+                unit.plannedMoveX = unit.x;
+                unit.plannedMoveY = unit.y;
             }
         }
 
@@ -348,6 +457,18 @@ namespace EdoStrategy.Core
             UnitDefinition definition)
         {
             HexGrid grid = mapView.Grid;
+
+            if (unit.x == targetX && unit.y == targetY)
+            {
+                unit.hasPlannedMove = false;
+                Debug.Log(
+                    string.Format(
+                        "移動予定キャンセル: ({0},{1})",
+                        unit.x,
+                        unit.y));
+                return true;
+            }
+
             if (!grid.IsInBounds(targetX, targetY))
             {
                 Debug.LogWarning(
@@ -395,25 +516,6 @@ namespace EdoStrategy.Core
             {
                 Vector2Int step = path[i];
 
-                UnitData unitOnStep = unitManager.GetUnitAt(step.x, step.y);
-                if (unitOnStep != null)
-                {
-                    if (unitOnStep.faction != unit.faction)
-                    {
-                        Debug.LogWarning(
-                            string.Format(
-                                "移動失敗: 敵ユニットが経路上に存在 ({0},{1}) -> ({2},{3}), 経路マス=({4},{5}), 残り移動力={6}",
-                                unit.x,
-                                unit.y,
-                                targetX,
-                                targetY,
-                                step.x,
-                                step.y,
-                                unit.remainingMovePoints));
-                        return false;
-                    }
-                }
-
                 HexCell cell = grid.GetCell(step.x, step.y);
                 TerrainDefinition terrain =
                     grid.GetTerrainDefinition(cell.terrainId);
@@ -438,38 +540,33 @@ namespace EdoStrategy.Core
                 totalMoveCost += cost;
             }
 
-            if (unit.remainingMovePoints <= 0 ||
-                totalMoveCost > unit.remainingMovePoints)
+            int movePoints = definition != null ? definition.movePoints : 0;
+            if (movePoints <= 0 || totalMoveCost > movePoints)
             {
                 Debug.LogWarning(
                     string.Format(
-                        "移動失敗: 移動コスト超過 ({0},{1}) -> ({2},{3}), 必要コスト={4}, 残り移動力={5}",
+                        "移動予約失敗: 移動コスト超過 ({0},{1}) -> ({2},{3}), 必要コスト={4}, 移動力={5}",
                         unit.x,
                         unit.y,
                         targetX,
                         targetY,
                         totalMoveCost,
-                        unit.remainingMovePoints));
+                        movePoints));
                 return false;
             }
 
-            int fromX = unit.x;
-            int fromY = unit.y;
-            bool moved = unitManager.MoveUnit(unit, targetX, targetY, definition);
-            if (moved)
-            {
-                unit.remainingMovePoints -= totalMoveCost;
-                Debug.Log(
-                    string.Format(
-                        "移動成功: ({0},{1}) -> ({2},{3}), 消費コスト={4}, 残り移動力={5}",
-                        fromX,
-                        fromY,
-                        targetX,
-                        targetY,
-                        totalMoveCost,
-                        unit.remainingMovePoints));
-            }
-            return moved;
+            unit.hasPlannedMove = true;
+            unit.plannedMoveX = targetX;
+            unit.plannedMoveY = targetY;
+            Debug.Log(
+                string.Format(
+                    "移動予約: ({0},{1}) -> ({2},{3}), 必要コスト={4}",
+                    unit.x,
+                    unit.y,
+                    targetX,
+                    targetY,
+                    totalMoveCost));
+            return true;
         }
 
         private void HandleCellClick(Vector2 screenPosition)
