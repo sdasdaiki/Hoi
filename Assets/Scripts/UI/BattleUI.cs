@@ -11,6 +11,7 @@ namespace EdoStrategy.UI
     {
         [SerializeField] private TurnManager turnManager;
         [SerializeField] private UnitBoardView unitBoardView;
+        [SerializeField] private TMP_FontAsset japaneseFont;
 
         private TextMeshProUGUI statusLabel;
         private Button startBattleButton;
@@ -20,6 +21,9 @@ namespace EdoStrategy.UI
 
         private void Awake()
         {
+#if UNITY_EDITOR
+            EnsureJapaneseFont();
+#endif
             if (turnManager == null)
             {
                 turnManager = FindObjectOfType<TurnManager>();
@@ -28,10 +32,14 @@ namespace EdoStrategy.UI
             {
                 unitBoardView = FindObjectOfType<UnitBoardView>();
             }
+            ApplyJapaneseFontToTextComponents();
         }
 
         private void Start()
         {
+#if UNITY_EDITOR
+            EnsureJapaneseFont();
+#endif
             if (turnManager == null)
             {
                 turnManager = FindObjectOfType<TurnManager>();
@@ -39,6 +47,7 @@ namespace EdoStrategy.UI
 
             EnsureEventSystem();
             CreateBattleUi();
+            ApplyJapaneseFontToTextComponents();
             RefreshUi();
         }
 
@@ -57,6 +66,7 @@ namespace EdoStrategy.UI
                 unitBoardView = FindObjectOfType<UnitBoardView>();
             }
 
+            ApplyJapaneseFontToTextComponents();
             RefreshUi();
         }
 
@@ -233,6 +243,7 @@ namespace EdoStrategy.UI
             plannedArrowToggleLabel =
                 plannedArrowToggleButton
                     .GetComponentInChildren<TextMeshProUGUI>();
+            ApplyJapaneseFontToTextComponents();
         }
 
         private TMP_FontAsset LoadMeiryoFont()
@@ -369,6 +380,70 @@ namespace EdoStrategy.UI
                     "EventSystem",
                     typeof(UnityEngine.EventSystems.EventSystem),
                     typeof(UnityEngine.EventSystems.StandaloneInputModule));
+            }
+        }
+
+#if UNITY_EDITOR
+        private void OnValidate()
+        {
+            EnsureJapaneseFont();
+        }
+
+        private void EnsureJapaneseFont()
+        {
+            if (japaneseFont != null)
+            {
+                return;
+            }
+
+            string[] guids =
+                UnityEditor.AssetDatabase.FindAssets(
+                    "t:TMP_FontAsset",
+                    new[] { "Assets/Fonts" });
+            for (int i = 0; i < guids.Length; i++)
+            {
+                string path =
+                    UnityEditor.AssetDatabase.GUIDToAssetPath(guids[i]);
+                TMP_FontAsset font =
+                    UnityEditor.AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(
+                        path);
+                if (font == null)
+                {
+                    continue;
+                }
+
+                if (font.name.IndexOf(
+                        "MEIRYO",
+                        System.StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    guids.Length == 1)
+                {
+                    japaneseFont = font;
+                    UnityEditor.EditorUtility.SetDirty(this);
+                    return;
+                }
+            }
+        }
+#endif
+
+        private void ApplyJapaneseFontToTextComponents()
+        {
+            if (japaneseFont == null)
+            {
+                japaneseFont = LoadMeiryoFont();
+            }
+            if (japaneseFont == null)
+            {
+                return;
+            }
+
+            TextMeshProUGUI[] textComponents =
+                GetComponentsInChildren<TextMeshProUGUI>(true);
+            for (int i = 0; i < textComponents.Length; i++)
+            {
+                if (textComponents[i] != null)
+                {
+                    textComponents[i].font = japaneseFont;
+                }
             }
         }
 
