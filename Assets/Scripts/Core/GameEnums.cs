@@ -21,6 +21,7 @@ namespace EdoStrategy.Core
         PlayerCommandPhase,
         ExecutionPhase,
         ReconAndReportPhase,
-        CheckVictoryPhase
+        CheckVictoryPhase,
+        BattleEnded
     }
 }

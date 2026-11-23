@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using EdoStrategy.Command;
 using EdoStrategy.Map;
 using EdoStrategy.Units;
 using UnityEngine;
@@ -16,6 +17,9 @@ namespace EdoStrategy.Core
         [SerializeField] private GameManager gameManager;
         [SerializeField] private Camera battleCamera;
         [SerializeField] private bool spawnTestUnitsOnStart = true;
+        [SerializeField] private string loadMapName = "";
+
+        public event System.Action OnCommandStateChanged;
 
         private UnitManager unitManager;
         private UnitData selectedUnit;
@@ -73,6 +77,7 @@ namespace EdoStrategy.Core
         public void StartBattle()
         {
             State = BattleState.PlayerCommandPhase;
+            OnCommandStateChanged?.Invoke();
         }
 
         public void EndPlayerCommandPhase()
@@ -83,6 +88,7 @@ namespace EdoStrategy.Core
             }
 
             State = BattleState.ExecutionPhase;
+            OnCommandStateChanged?.Invoke();
             StartCoroutine(RunExecutionSequence());
         }
 
@@ -91,9 +97,11 @@ namespace EdoStrategy.Core
             if (unit == null || unit.faction != Faction.Player)
             {
                 selectedUnit = null;
+                OnCommandStateChanged?.Invoke();
                 return;
             }
             selectedUnit = unit;
+            OnCommandStateChanged?.Invoke();
         }
 
         public bool TryMoveSelectedUnit(int targetX, int targetY)
@@ -119,6 +127,22 @@ namespace EdoStrategy.Core
             if (mapView == null || mapView.Grid == null)
             {
                 yield break;
+            }
+
+            if (!string.IsNullOrWhiteSpace(loadMapName))
+            {
+                try
+                {
+                    MapSaveData saveData =
+                        MapSerializer.Load(loadMapName);
+                    mapView.LoadMap(saveData);
+                }
+                catch (System.Exception exception)
+                {
+                    Debug.LogWarning(
+                        "指定されたマップの読込に失敗しました: " +
+                        loadMapName + " / " + exception.Message);
+                }
             }
 
             unitManager = new UnitManager(mapView.Grid);
@@ -147,6 +171,10 @@ namespace EdoStrategy.Core
             yield return null;
 
             CheckVictory();
+            if (State == BattleState.BattleEnded)
+            {
+                yield break;
+            }
             turnNumber++;
             ResetRemainingMovePoints();
             State = BattleState.PlayerCommandPhase;
@@ -162,7 +190,9 @@ namespace EdoStrategy.Core
             var planningUnits = new List<UnitData>(unitManager.Units.Count);
             foreach (UnitData unit in unitManager.Units)
             {
-                if (unit != null && unit.IsAlive && unit.hasPlannedMove)
+                if (unit != null &&
+                    unit.IsAlive &&
+                    HasMoveOrder(unit, out Order moveOrder))
                 {
                     planningUnits.Add(unit);
                 }
@@ -170,6 +200,10 @@ namespace EdoStrategy.Core
 
             foreach (UnitData unit in planningUnits)
             {
+                if (!HasMoveOrder(unit, out Order moveOrder))
+                {
+                    continue;
+                }
                 UnitDefinition definition =
                     gameManager != null
                         ? gameManager.GetUnitDefinition(GetUnitTypeId(unit))
@@ -177,24 +211,15 @@ namespace EdoStrategy.Core
 
                 HexGrid grid = mapView.Grid;
                 List<Vector2Int> path =
-                    grid.FindPath(
-                        unit.x,
-                        unit.y,
-                        unit.plannedMoveX,
-                        unit.plannedMoveY,
-                        unit.faction,
-                        unitManager);
-                if (path == null || path.Count < 2)
+                    moveOrder.path != null
+                        ? moveOrder.path
+                        : new List<Vector2Int>();
+                if (path.Count < 2)
                 {
                     Debug.LogWarning(
-                        string.Format(
-                            "予定移動失敗: 経路が見つからない ({0},{1}) -> ({2},{3})",
-                            unit.x,
-                            unit.y,
-                            unit.plannedMoveX,
-                            unit.plannedMoveY));
-                    unit.hasPlannedMove = false;
-                    unit.plannedPath.Clear();
+                        "予定移動失敗: 保存された経路がありません");
+                    unit.pendingOrders.Remove(moveOrder);
+                    OnCommandStateChanged?.Invoke();
                     continue;
                 }
 
@@ -266,8 +291,8 @@ namespace EdoStrategy.Core
                 }
 
                 unit.remainingMovePoints -= consumedMoveCost;
-                unit.hasPlannedMove = false;
-                unit.plannedPath.Clear();
+                unit.pendingOrders.Remove(moveOrder);
+                OnCommandStateChanged?.Invoke();
                 Debug.Log(
                     string.Format(
                         "予定移動実行: ({0},{1}) -> ({2},{3}), 消費コスト={4}, 残り移動力={5}",
@@ -300,10 +325,7 @@ namespace EdoStrategy.Core
                         : null;
                 unit.remainingMovePoints =
                     definition != null ? definition.movePoints : 0;
-                unit.hasPlannedMove = false;
-                unit.plannedMoveX = unit.x;
-                unit.plannedMoveY = unit.y;
-                unit.plannedPath.Clear();
+                ClearMoveOrders(unit);
             }
         }
 
@@ -349,10 +371,14 @@ namespace EdoStrategy.Core
             if (!enemyAlive || !enemyHeadquartersAlive)
             {
                 Debug.Log("Player victory.");
+                State = BattleState.BattleEnded;
+                OnCommandStateChanged?.Invoke();
             }
             else if (!playerAlive || !playerHeadquartersAlive)
             {
                 Debug.Log("Player defeat.");
+                State = BattleState.BattleEnded;
+                OnCommandStateChanged?.Invoke();
             }
         }
 
@@ -411,11 +437,7 @@ namespace EdoStrategy.Core
 
             var unit = new UnitData
             {
-                unitId = string.Format(
-                    "{0}-{1}-{2}",
-                    faction,
-                    unitTypeId,
-                    turnNumber),
+                unitId = System.Guid.NewGuid().ToString(),
                 unitName = unitName,
                 faction = faction,
                 x = position.x,
@@ -486,8 +508,8 @@ namespace EdoStrategy.Core
 
             if (unit.x == targetX && unit.y == targetY)
             {
-                unit.hasPlannedMove = false;
-                unit.plannedPath.Clear();
+                ClearMoveOrders(unit);
+                OnCommandStateChanged?.Invoke();
                 Debug.Log(
                     string.Format(
                         "移動予定キャンセル: ({0},{1})",
@@ -530,6 +552,7 @@ namespace EdoStrategy.Core
                     targetX,
                     targetY,
                     unit.faction,
+                    definition,
                     unitManager);
             if (path == null || path.Count < 2)
             {
@@ -588,11 +611,35 @@ namespace EdoStrategy.Core
                 return false;
             }
 
-            unit.hasPlannedMove = true;
-            unit.plannedMoveX = targetX;
-            unit.plannedMoveY = targetY;
-            unit.plannedPath.Clear();
-            unit.plannedPath.AddRange(path);
+            foreach (UnitData otherUnit in unitManager.Units)
+            {
+                if (otherUnit == unit ||
+                    otherUnit.faction != unit.faction)
+                {
+                    continue;
+                }
+                if (HasMoveOrder(otherUnit, out Order otherMove) &&
+                    otherMove.targetX == targetX &&
+                    otherMove.targetY == targetY)
+                {
+                    Debug.LogWarning(
+                        "移動予約失敗: 他の自軍ユニットが既に移動予定先にしています (" +
+                        targetX + "," + targetY + ")");
+                    return false;
+                }
+            }
+
+            ClearMoveOrders(unit);
+            var moveOrder = new Order
+            {
+                orderType = OrderType.Move,
+                targetX = targetX,
+                targetY = targetY,
+                remainingDelayTurns = 0
+            };
+            moveOrder.path.AddRange(path);
+            unit.pendingOrders.Add(moveOrder);
+            OnCommandStateChanged?.Invoke();
             Debug.Log(
                 string.Format(
                     "移動予約: ({0},{1}) -> ({2},{3}), 必要コスト={4}",
@@ -626,9 +673,9 @@ namespace EdoStrategy.Core
             {
                 if (plannedUnit != null &&
                     plannedUnit.faction == Faction.Player &&
-                    plannedUnit.hasPlannedMove &&
-                    plannedUnit.plannedMoveX == cellPosition.x &&
-                    plannedUnit.plannedMoveY == cellPosition.y)
+                    HasMoveOrder(plannedUnit, out Order plannedMove) &&
+                    plannedMove.targetX == cellPosition.x &&
+                    plannedMove.targetY == cellPosition.y)
                 {
                     SelectUnit(plannedUnit);
                     return;
@@ -647,6 +694,43 @@ namespace EdoStrategy.Core
             }
 
             TryMoveSelectedUnit(cellPosition.x, cellPosition.y);
+        }
+
+        public bool HasMoveOrder(UnitData unit, out Order moveOrder)
+        {
+            moveOrder = null;
+            if (unit == null || unit.pendingOrders == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < unit.pendingOrders.Count; i++)
+            {
+                Order order = unit.pendingOrders[i];
+                if (order != null && order.orderType == OrderType.Move)
+                {
+                    moveOrder = order;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public void ClearMoveOrders(UnitData unit)
+        {
+            if (unit == null || unit.pendingOrders == null)
+            {
+                return;
+            }
+
+            for (int i = unit.pendingOrders.Count - 1; i >= 0; i--)
+            {
+                Order order = unit.pendingOrders[i];
+                if (order != null && order.orderType == OrderType.Move)
+                {
+                    unit.pendingOrders.RemoveAt(i);
+                }
+            }
         }
 
         private void ResolveReferences()

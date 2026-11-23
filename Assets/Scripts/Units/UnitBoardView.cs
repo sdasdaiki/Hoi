@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using EdoStrategy.Core;
 using EdoStrategy.Map;
+using EdoStrategy.Command;
 using UnityEngine;
 using UnityEngine.Tilemaps;
 
@@ -54,6 +55,16 @@ namespace EdoStrategy.Units
             unitManager.UnitMoved += OnUnitMoved;
             unitManager.UnitRemoved += OnUnitRemoved;
 
+            if (turnManager == null)
+            {
+                turnManager = FindObjectOfType<TurnManager>();
+            }
+            if (turnManager != null)
+            {
+                turnManager.OnCommandStateChanged += OnCommandStateChanged;
+            }
+            OnCommandStateChanged();
+
             foreach (UnitData unit in unitManager.Units)
             {
                 OnUnitAdded(unit);
@@ -78,6 +89,10 @@ namespace EdoStrategy.Units
             {
                 turnManager = FindObjectOfType<TurnManager>();
             }
+        }
+
+        private void OnCommandStateChanged()
+        {
             RefreshPlannedArrows();
             RefreshSelectionAndReachable();
         }
@@ -152,6 +167,7 @@ namespace EdoStrategy.Units
                     selectedUnit.x,
                     selectedUnit.y,
                     movePoints,
+                    Faction.Player,
                     definition,
                     unitManager);
 
@@ -265,11 +281,28 @@ namespace EdoStrategy.Units
 
                 bool visible =
                     unit.faction == Faction.Player &&
-                    unit.hasPlannedMove &&
+                    HasMoveOrder(unit) &&
                     (ShowAllPlannedArrows ||
                      unit == selectedUnit);
                 view.SetArrowVisible(visible);
             }
+        }
+
+        private static bool HasMoveOrder(UnitData unit)
+        {
+            if (unit == null || unit.pendingOrders == null)
+            {
+                return false;
+            }
+
+            foreach (Order order in unit.pendingOrders)
+            {
+                if (order != null && order.orderType == OrderType.Move)
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private void ResolveReferences()
@@ -296,6 +329,10 @@ namespace EdoStrategy.Units
 
         private void Unsubscribe()
         {
+            if (turnManager != null)
+            {
+                turnManager.OnCommandStateChanged -= OnCommandStateChanged;
+            }
             if (unitManager == null)
             {
                 return;
@@ -333,6 +370,7 @@ namespace EdoStrategy.Units
             {
                 view.Refresh();
             }
+            OnCommandStateChanged();
         }
 
         private void OnUnitRemoved(UnitData unit)

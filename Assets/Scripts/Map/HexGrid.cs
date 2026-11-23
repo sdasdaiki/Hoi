@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using EdoStrategy.Core;
+using EdoStrategy.Command;
 using EdoStrategy.Units;
 using UnityEngine;
 
@@ -154,6 +155,7 @@ namespace EdoStrategy.Map
             int startX,
             int startY,
             int movePoints,
+            Faction movingFaction,
             UnitDefinition definition,
             UnitManager unitManager)
         {
@@ -173,10 +175,6 @@ namespace EdoStrategy.Map
 
             var frontier = new List<ReachableNode>();
             int startIndex = startY * Width + startX;
-            UnitData movingUnit =
-                unitManager != null
-                    ? unitManager.GetUnitAt(startX, startY)
-                    : null;
             costs[startIndex] = 0;
             frontier.Add(new ReachableNode(startIndex, 0));
 
@@ -208,8 +206,7 @@ namespace EdoStrategy.Map
                             ? unitManager.GetUnitAt(neighbor.x, neighbor.y)
                             : null;
                     if (occupant != null &&
-                        movingUnit != null &&
-                        occupant.faction != movingUnit.faction)
+                        occupant.faction != movingFaction)
                     {
                         continue;
                     }
@@ -249,7 +246,34 @@ namespace EdoStrategy.Map
                             : null;
                     if (occupant == null)
                     {
-                        reachable.Add(new Vector2Int(x, y));
+                        bool reserved = false;
+                        foreach (UnitData unit in unitManager.Units)
+                        {
+                            if (unit == null ||
+                                unit.faction != movingFaction)
+                            {
+                                continue;
+                            }
+                            foreach (Order order in unit.pendingOrders)
+                            {
+                                if (order != null &&
+                                    order.orderType == OrderType.Move &&
+                                    order.targetX == x &&
+                                    order.targetY == y)
+                                {
+                                    reserved = true;
+                                    break;
+                                }
+                            }
+                            if (reserved)
+                            {
+                                break;
+                            }
+                        }
+                        if (!reserved)
+                        {
+                            reachable.Add(new Vector2Int(x, y));
+                        }
                     }
                 }
             }
@@ -262,6 +286,7 @@ namespace EdoStrategy.Map
             int goalX,
             int goalY,
             Faction movingFaction,
+            UnitDefinition definition,
             UnitManager unitManager)
         {
             return FindPathInternal(
@@ -270,6 +295,7 @@ namespace EdoStrategy.Map
                 goalX,
                 goalY,
                 movingFaction,
+                definition,
                 unitManager);
         }
 
@@ -281,6 +307,7 @@ namespace EdoStrategy.Map
                 goalX,
                 goalY,
                 Faction.None,
+                null,
                 null);
         }
 
@@ -290,6 +317,7 @@ namespace EdoStrategy.Map
             int goalX,
             int goalY,
             Faction movingFaction,
+            UnitDefinition definition,
             UnitManager unitManager)
         {
             HexCell start = GetCell(startX, startY);
@@ -353,7 +381,12 @@ namespace EdoStrategy.Map
                         }
                     }
 
-                    int moveCost = GetMoveCost(neighbor.x, neighbor.y);
+                    HexCell neighborCell = GetCell(neighbor.x, neighbor.y);
+                    TerrainDefinition neighborTerrain =
+                        GetTerrainDefinition(neighborCell.terrainId);
+                    int moveCost = definition != null
+                        ? definition.GetMoveCost(neighborTerrain)
+                        : GetMoveCost(neighbor.x, neighbor.y);
                     if (moveCost < 0)
                     {
                         continue;

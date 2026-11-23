@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using EdoStrategy.Map;
+using UnityEngine;
 
 namespace EdoStrategy.Units
 {
@@ -30,8 +31,28 @@ namespace EdoStrategy.Units
 
         public void AddUnit(UnitData unit)
         {
-            if (unit == null || units.Contains(unit) || GetUnitAt(unit.x, unit.y) != null)
+            if (unit == null)
             {
+                return;
+            }
+            if (units.Contains(unit))
+            {
+                Debug.LogWarning(
+                    "ユニット追加拒否: 同じユニット参照が既に登録されています。");
+                return;
+            }
+            if (!string.IsNullOrEmpty(unit.unitId) &&
+                GetUnitById(unit.unitId) != null)
+            {
+                Debug.LogWarning(
+                    "ユニット追加拒否: 重複したunitId=" + unit.unitId);
+                return;
+            }
+            if (GetUnitAt(unit.x, unit.y) != null)
+            {
+                Debug.LogWarning(
+                    "ユニット追加拒否: 同じ座標が占有されています (" +
+                    unit.x + "," + unit.y + ")");
                 return;
             }
 

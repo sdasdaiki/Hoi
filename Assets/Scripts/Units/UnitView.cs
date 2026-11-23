@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using EdoStrategy.Command;
 using EdoStrategy.Core;
 using EdoStrategy.Map;
 using UnityEngine;
@@ -25,6 +26,26 @@ namespace EdoStrategy.Units
         public UnitData UnitData
         {
             get { return unitData; }
+        }
+
+        public bool TryGetMoveOrder(out Order moveOrder)
+        {
+            moveOrder = null;
+            if (unitData == null || unitData.pendingOrders == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < unitData.pendingOrders.Count; i++)
+            {
+                Order order = unitData.pendingOrders[i];
+                if (order != null && order.orderType == OrderType.Move)
+                {
+                    moveOrder = order;
+                    return true;
+                }
+            }
+            return false;
         }
 
         public void Initialize(
@@ -91,6 +112,12 @@ namespace EdoStrategy.Units
 
         private void EnsurePlannedMoveMarker()
         {
+            if (!TryGetMoveOrder(out Order moveOrder))
+            {
+                ClearPlannedMoveMarker();
+                return;
+            }
+
             if (plannedMoveMarker == null)
             {
                 Transform markerTransform = transform.Find("PlannedMoveMarker");
@@ -122,12 +149,12 @@ namespace EdoStrategy.Units
             Vector3 worldPosition = tilemap != null
                 ? tilemap.GetCellCenterWorld(
                     new Vector3Int(
-                        unitData.plannedMoveX,
-                        unitData.plannedMoveY,
+                        moveOrder.targetX,
+                        moveOrder.targetY,
                         0))
                 : new Vector3(
-                    unitData.plannedMoveX,
-                    unitData.plannedMoveY,
+                    moveOrder.targetX,
+                    moveOrder.targetY,
                     0f);
             plannedMoveMarker.transform.position = worldPosition;
         }
@@ -143,7 +170,7 @@ namespace EdoStrategy.Units
 
         public void SetArrowVisible(bool visible)
         {
-            if (visible && unitData != null && unitData.hasPlannedMove)
+            if (visible && TryGetMoveOrder(out Order moveOrder))
             {
                 EnsurePlannedArrow();
                 if (plannedArrowLine != null)
@@ -213,15 +240,14 @@ namespace EdoStrategy.Units
         private void UpdatePlannedArrow()
         {
             if (plannedArrowLine == null ||
-                unitData == null ||
-                unitData.plannedPath == null ||
-                unitData.plannedPath.Count < 1)
+                !TryGetMoveOrder(out Order moveOrder) ||
+                moveOrder.path == null ||
+                moveOrder.path.Count < 1)
             {
                 return;
             }
 
-            System.Collections.Generic.List<Vector2Int> path =
-                unitData.plannedPath;
+            List<Vector2Int> path = moveOrder.path;
             Vector3[] points = new Vector3[path.Count];
             for (int i = 0; i < path.Count; i++)
             {
@@ -449,7 +475,7 @@ namespace EdoStrategy.Units
                 targetWorldPosition,
                 1f - Mathf.Exp(-moveSpeed * Time.deltaTime));
 
-            if (unitData != null && unitData.hasPlannedMove)
+            if (TryGetMoveOrder(out Order moveOrder))
             {
                 EnsurePlannedMoveMarker();
             }

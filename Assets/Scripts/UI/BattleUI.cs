@@ -1,4 +1,5 @@
 using EdoStrategy.Core;
+using EdoStrategy.Map;
 using EdoStrategy.Units;
 using TMPro;
 using UnityEngine;
@@ -72,15 +73,74 @@ namespace EdoStrategy.UI
                 : (string.IsNullOrEmpty(selectedUnit.unitName)
                     ? selectedUnit.unitId
                     : selectedUnit.unitName);
+            string unitTypeName = "None";
+            int currentManpower = 0;
+            int maxManpower = 0;
+            int organization = 0;
+            string terrainName = "None";
+            int defenseMultiplier = 0;
+
+            if (selectedUnit != null)
+            {
+                UnitDefinition unitDefinition =
+                    FindObjectOfType<GameManager>() != null
+                        ? FindObjectOfType<GameManager>()
+                            .GetUnitDefinition(
+                                GetSelectedUnitTypeId(selectedUnit))
+                        : null;
+                if (unitDefinition != null)
+                {
+                    unitTypeName =
+                        string.IsNullOrEmpty(unitDefinition.displayName)
+                            ? unitDefinition.unitTypeId
+                            : unitDefinition.displayName;
+                    maxManpower =
+                        unitDefinition.maxManpower;
+                }
+                currentManpower = selectedUnit.CurrentTotalManpower;
+                organization = selectedUnit.organization;
+
+                HexTilemapView mapView =
+                    FindObjectOfType<HexTilemapView>();
+                if (mapView != null &&
+                    mapView.Grid != null)
+                {
+                    HexCell cell =
+                        mapView.Grid.GetCell(
+                            selectedUnit.x,
+                            selectedUnit.y);
+                    if (cell != null)
+                    {
+                        TerrainDefinition terrain =
+                            mapView.Grid.GetTerrainDefinition(
+                                cell.terrainId);
+                        if (terrain != null)
+                        {
+                            terrainName =
+                                string.IsNullOrEmpty(terrain.displayName)
+                                    ? terrain.terrainId
+                                    : terrain.displayName;
+                            defenseMultiplier =
+                                terrain.defenseMultiplier;
+                        }
+                    }
+                }
+            }
 
             statusLabel.text = string.Format(
-                "Phase: {0}\nTurn: {1}\nSelected: {2}\nPosition: ({3}, {4})\nRemaining Move: {5}",
+                "Phase: {0}\nTurn: {1}\nSelected: {2}\nUnit: {3}\nPosition: ({4}, {5})\nManpower: {6} / {7}\nOrganization: {8}\nRemaining Move: {9}\nTerrain: {10}\nDefense: {11}",
                 turnManager.State,
                 turnManager.TurnNumber,
                 selectedName,
+                unitTypeName,
                 selectedUnit != null ? selectedUnit.x : 0,
                 selectedUnit != null ? selectedUnit.y : 0,
-                selectedUnit != null ? selectedUnit.remainingMovePoints : 0);
+                currentManpower,
+                maxManpower,
+                organization,
+                selectedUnit != null ? selectedUnit.remainingMovePoints : 0,
+                terrainName,
+                defenseMultiplier);
 
             if (startBattleButton != null)
             {
@@ -310,6 +370,18 @@ namespace EdoStrategy.UI
                     typeof(UnityEngine.EventSystems.EventSystem),
                     typeof(UnityEngine.EventSystems.StandaloneInputModule));
             }
+        }
+
+        private static string GetSelectedUnitTypeId(UnitData unit)
+        {
+            if (unit == null ||
+                unit.battalions == null ||
+                unit.battalions.Count == 0 ||
+                unit.battalions[0] == null)
+            {
+                return null;
+            }
+            return unit.battalions[0].unitTypeId;
         }
     }
 }

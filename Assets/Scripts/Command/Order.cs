@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using EdoStrategy.Core;
+using UnityEngine;
 
 namespace EdoStrategy.Command
 {
@@ -11,5 +13,6 @@ namespace EdoStrategy.Command
         public int targetY;
         public string targetUnitId;
         public int remainingDelayTurns;
+        public List<Vector2Int> path = new List<Vector2Int>();
     }
 }
