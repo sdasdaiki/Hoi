@@ -564,6 +564,7 @@ MonoBehaviour:
   gameManager: {fileID: 913959719}
   battleCamera: {fileID: 519420031}
   spawnTestUnitsOnStart: 1
+  loadMapName: Test01
 --- !u!114 &913959718
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -631,6 +632,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   turnManager: {fileID: 913959717}
+  unitBoardView: {fileID: 0}
+  japaneseFont: {fileID: 11400000, guid: 7c9036b6f1d070b41a65af7fcb38aed5, type: 2}
 --- !u!1 &1158002776
 GameObject:
   m_ObjectHideFlags: 0
