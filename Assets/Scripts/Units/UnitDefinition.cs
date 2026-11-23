@@ -28,6 +28,7 @@ namespace EdoStrategy.Units
         public int attackRange = 1;
         public int recon = 1;
         public int visionRange = 2;
+        public Sprite unitIcon;
 
         public List<TerrainMoveCostOverride> terrainCostOverrides =
             new List<TerrainMoveCostOverride>();

@@ -63,10 +63,13 @@ namespace EdoStrategy.UI
                     : selectedUnit.unitName);
 
             statusLabel.text = string.Format(
-                "Phase: {0}\nTurn: {1}\nSelected: {2}",
+                "Phase: {0}\nTurn: {1}\nSelected: {2}\nPosition: ({3}, {4})\nRemaining Move: {5}",
                 turnManager.State,
                 turnManager.TurnNumber,
-                selectedName);
+                selectedName,
+                selectedUnit != null ? selectedUnit.x : 0,
+                selectedUnit != null ? selectedUnit.y : 0,
+                selectedUnit != null ? selectedUnit.remainingMovePoints : 0);
 
             if (startBattleButton != null)
             {

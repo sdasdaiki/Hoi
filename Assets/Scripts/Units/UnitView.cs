@@ -13,6 +13,7 @@ namespace EdoStrategy.Units
         private UnitDefinition unitDefinition;
         private Tilemap tilemap;
         private SpriteRenderer spriteRenderer;
+        private SpriteRenderer factionBadge;
         private TextMesh label;
         private Vector3 targetWorldPosition;
 
@@ -35,13 +36,31 @@ namespace EdoStrategy.Units
             {
                 spriteRenderer = gameObject.AddComponent<SpriteRenderer>();
             }
-            spriteRenderer.sprite = CreateCircleSprite();
             spriteRenderer.sortingOrder = 10;
-            spriteRenderer.color = data.faction == Faction.Player
-                ? new Color(0.18f, 0.48f, 1f, 1f)
-                : data.faction == Faction.Enemy
-                    ? new Color(1f, 0.22f, 0.18f, 1f)
-                    : new Color(0.7f, 0.7f, 0.7f, 1f);
+
+            if (unitDefinition != null && unitDefinition.unitIcon != null)
+            {
+                spriteRenderer.sprite = unitDefinition.unitIcon;
+                spriteRenderer.color = Color.white;
+                FitSpriteToTile(spriteRenderer, 0.7f);
+                EnsureFactionBadge();
+                factionBadge.color = data.faction == Faction.Player
+                    ? new Color(0.18f, 0.48f, 1f, 0.95f)
+                    : data.faction == Faction.Enemy
+                        ? new Color(1f, 0.22f, 0.18f, 0.95f)
+                        : new Color(0.7f, 0.7f, 0.7f, 0.95f);
+            }
+            else
+            {
+                spriteRenderer.sprite = CreateCircleSprite();
+                spriteRenderer.color = data.faction == Faction.Player
+                    ? new Color(0.18f, 0.48f, 1f, 1f)
+                    : data.faction == Faction.Enemy
+                        ? new Color(1f, 0.22f, 0.18f, 1f)
+                        : new Color(0.7f, 0.7f, 0.7f, 1f);
+                transform.localScale = Vector3.one;
+                RemoveFactionBadge();
+            }
 
             Transform labelTransform = transform.Find("UnitLabel");
             if (labelTransform != null)
@@ -63,6 +82,62 @@ namespace EdoStrategy.Units
 
             RefreshLabel();
             MoveToTileImmediately(data.x, data.y);
+        }
+
+        private void EnsureFactionBadge()
+        {
+            if (factionBadge == null)
+            {
+                Transform badgeTransform = transform.Find("FactionBadge");
+                if (badgeTransform != null)
+                {
+                    factionBadge = badgeTransform.GetComponent<SpriteRenderer>();
+                }
+            }
+
+            if (factionBadge == null)
+            {
+                GameObject badgeObject = new GameObject("FactionBadge");
+                badgeObject.transform.SetParent(transform, false);
+                factionBadge = badgeObject.AddComponent<SpriteRenderer>();
+                factionBadge.sprite = CreateCircleSprite();
+                factionBadge.sortingOrder = 9;
+
+                Vector3 parentScale = transform.localScale;
+                float compensationX =
+                    Mathf.Abs(parentScale.x) > 0.0001f
+                        ? 0.85f / Mathf.Abs(parentScale.x)
+                        : 0.85f;
+                float compensationY =
+                    Mathf.Abs(parentScale.y) > 0.0001f
+                        ? 0.85f / Mathf.Abs(parentScale.y)
+                        : 0.85f;
+                badgeObject.transform.localScale =
+                    new Vector3(compensationX, compensationY, 1f);
+            }
+            else
+            {
+                Vector3 parentScale = transform.localScale;
+                float compensationX =
+                    Mathf.Abs(parentScale.x) > 0.0001f
+                        ? 0.85f / Mathf.Abs(parentScale.x)
+                        : 0.85f;
+                float compensationY =
+                    Mathf.Abs(parentScale.y) > 0.0001f
+                        ? 0.85f / Mathf.Abs(parentScale.y)
+                        : 0.85f;
+                factionBadge.transform.localScale =
+                    new Vector3(compensationX, compensationY, 1f);
+            }
+        }
+
+        private void RemoveFactionBadge()
+        {
+            if (factionBadge != null)
+            {
+                Destroy(factionBadge.gameObject);
+                factionBadge = null;
+            }
         }
 
         public void MoveToTile(int x, int y)
@@ -99,6 +174,24 @@ namespace EdoStrategy.Units
                 ? unitDefinition.displayName
                 : unitData.unitName;
             label.text = string.Format("{0}\n{1}", name, unitData.CurrentTotalManpower);
+        }
+
+        private void FitSpriteToTile(SpriteRenderer renderer, float targetSize)
+        {
+            if (renderer == null || renderer.sprite == null)
+            {
+                return;
+            }
+
+            Vector2 spriteSize = renderer.sprite.bounds.size;
+            float longestSide = Mathf.Max(spriteSize.x, spriteSize.y);
+            if (longestSide <= 0f)
+            {
+                return;
+            }
+
+            float scale = targetSize / longestSide;
+            transform.localScale = new Vector3(scale, scale, 1f);
         }
 
         private void Update()

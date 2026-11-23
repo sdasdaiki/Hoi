@@ -24,4 +24,5 @@ MonoBehaviour:
   attackRange: 1
   recon: 1
   visionRange: 2
+  unitIcon: {fileID: 21300000, guid: 1440fbf5b00323d439c0255b3dcbdcc4, type: 3}
   terrainCostOverrides: []

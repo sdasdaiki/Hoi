@@ -145,7 +145,31 @@ namespace EdoStrategy.Core
 
             CheckVictory();
             turnNumber++;
+            ResetRemainingMovePoints();
             State = BattleState.PlayerCommandPhase;
+        }
+
+        private void ResetRemainingMovePoints()
+        {
+            if (unitManager == null)
+            {
+                return;
+            }
+
+            foreach (UnitData unit in unitManager.Units)
+            {
+                if (!unit.IsAlive)
+                {
+                    continue;
+                }
+
+                UnitDefinition definition =
+                    gameManager != null
+                        ? gameManager.GetUnitDefinition(GetUnitTypeId(unit))
+                        : null;
+                unit.remainingMovePoints =
+                    definition != null ? definition.movePoints : 0;
+            }
         }
 
         private void CheckVictory()
@@ -263,7 +287,9 @@ namespace EdoStrategy.Core
                 y = position.y,
                 organization = 1000,
                 maxOrganization = 1000,
-                supplyStatus = 1000
+                supplyStatus = 1000,
+                remainingMovePoints =
+                    definition != null ? definition.movePoints : 0
             };
             unit.battalions.Add(new BattalionData
             {
@@ -324,12 +350,28 @@ namespace EdoStrategy.Core
             HexGrid grid = mapView.Grid;
             if (!grid.IsInBounds(targetX, targetY))
             {
+                Debug.LogWarning(
+                    string.Format(
+                        "移動失敗: 範囲外 ({0},{1}) -> ({2},{3}), 残り移動力={4}",
+                        unit.x,
+                        unit.y,
+                        targetX,
+                        targetY,
+                        unit.remainingMovePoints));
                 return false;
             }
 
             UnitData occupant = unitManager.GetUnitAt(targetX, targetY);
             if (occupant != null)
             {
+                Debug.LogWarning(
+                    string.Format(
+                        "移動失敗: 他のユニットが占有中 ({0},{1}) -> ({2},{3}), 残り移動力={4}",
+                        unit.x,
+                        unit.y,
+                        targetX,
+                        targetY,
+                        unit.remainingMovePoints));
                 return false;
             }
 
@@ -337,6 +379,14 @@ namespace EdoStrategy.Core
                 grid.FindPath(unit.x, unit.y, targetX, targetY);
             if (path == null || path.Count < 2)
             {
+                Debug.LogWarning(
+                    string.Format(
+                        "移動失敗: 経路が見つからない ({0},{1}) -> ({2},{3}), 残り移動力={4}",
+                        unit.x,
+                        unit.y,
+                        targetX,
+                        targetY,
+                        unit.remainingMovePoints));
                 return false;
             }
 
@@ -350,6 +400,16 @@ namespace EdoStrategy.Core
                 {
                     if (unitOnStep.faction != unit.faction)
                     {
+                        Debug.LogWarning(
+                            string.Format(
+                                "移動失敗: 敵ユニットが経路上に存在 ({0},{1}) -> ({2},{3}), 経路マス=({4},{5}), 残り移動力={6}",
+                                unit.x,
+                                unit.y,
+                                targetX,
+                                targetY,
+                                step.x,
+                                step.y,
+                                unit.remainingMovePoints));
                         return false;
                     }
                 }
@@ -362,18 +422,54 @@ namespace EdoStrategy.Core
                     : grid.GetMoveCost(step.x, step.y);
                 if (cost < 0)
                 {
+                    Debug.LogWarning(
+                        string.Format(
+                            "移動失敗: 進入不可の地形 ({0},{1}) -> ({2},{3}), 経路マス=({4},{5}), コスト={6}, 残り移動力={7}",
+                            unit.x,
+                            unit.y,
+                            targetX,
+                            targetY,
+                            step.x,
+                            step.y,
+                            cost,
+                            unit.remainingMovePoints));
                     return false;
                 }
                 totalMoveCost += cost;
             }
 
-            int movePoints = definition != null ? definition.movePoints : 0;
-            if (movePoints <= 0 || totalMoveCost > movePoints)
+            if (unit.remainingMovePoints <= 0 ||
+                totalMoveCost > unit.remainingMovePoints)
             {
+                Debug.LogWarning(
+                    string.Format(
+                        "移動失敗: 移動コスト超過 ({0},{1}) -> ({2},{3}), 必要コスト={4}, 残り移動力={5}",
+                        unit.x,
+                        unit.y,
+                        targetX,
+                        targetY,
+                        totalMoveCost,
+                        unit.remainingMovePoints));
                 return false;
             }
 
-            return unitManager.MoveUnit(unit, targetX, targetY, definition);
+            int fromX = unit.x;
+            int fromY = unit.y;
+            bool moved = unitManager.MoveUnit(unit, targetX, targetY, definition);
+            if (moved)
+            {
+                unit.remainingMovePoints -= totalMoveCost;
+                Debug.Log(
+                    string.Format(
+                        "移動成功: ({0},{1}) -> ({2},{3}), 消費コスト={4}, 残り移動力={5}",
+                        fromX,
+                        fromY,
+                        targetX,
+                        targetY,
+                        totalMoveCost,
+                        unit.remainingMovePoints));
+            }
+            return moved;
         }
 
         private void HandleCellClick(Vector2 screenPosition)
