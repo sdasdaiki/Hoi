@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using EdoStrategy.Core;
 using EdoStrategy.Units;
 using UnityEngine;
 
@@ -172,6 +173,10 @@ namespace EdoStrategy.Map
 
             var frontier = new List<ReachableNode>();
             int startIndex = startY * Width + startX;
+            UnitData movingUnit =
+                unitManager != null
+                    ? unitManager.GetUnitAt(startX, startY)
+                    : null;
             costs[startIndex] = 0;
             frontier.Add(new ReachableNode(startIndex, 0));
 
@@ -202,7 +207,9 @@ namespace EdoStrategy.Map
                         unitManager != null
                             ? unitManager.GetUnitAt(neighbor.x, neighbor.y)
                             : null;
-                    if (occupant != null)
+                    if (occupant != null &&
+                        movingUnit != null &&
+                        occupant.faction != movingUnit.faction)
                     {
                         continue;
                     }
@@ -234,14 +241,56 @@ namespace EdoStrategy.Map
             {
                 if (costs[i] != int.MaxValue && i != startIndex)
                 {
-                    reachable.Add(
-                        new Vector2Int(i % Width, i / Width));
+                    int x = i % Width;
+                    int y = i / Width;
+                    UnitData occupant =
+                        unitManager != null
+                            ? unitManager.GetUnitAt(x, y)
+                            : null;
+                    if (occupant == null)
+                    {
+                        reachable.Add(new Vector2Int(x, y));
+                    }
                 }
             }
             return reachable;
         }
 
+        public List<Vector2Int> FindPath(
+            int startX,
+            int startY,
+            int goalX,
+            int goalY,
+            Faction movingFaction,
+            UnitManager unitManager)
+        {
+            return FindPathInternal(
+                startX,
+                startY,
+                goalX,
+                goalY,
+                movingFaction,
+                unitManager);
+        }
+
         public List<Vector2Int> FindPath(int startX, int startY, int goalX, int goalY)
+        {
+            return FindPathInternal(
+                startX,
+                startY,
+                goalX,
+                goalY,
+                Faction.None,
+                null);
+        }
+
+        private List<Vector2Int> FindPathInternal(
+            int startX,
+            int startY,
+            int goalX,
+            int goalY,
+            Faction movingFaction,
+            UnitManager unitManager)
         {
             HexCell start = GetCell(startX, startY);
             HexCell goal = GetCell(goalX, goalY);
@@ -287,6 +336,23 @@ namespace EdoStrategy.Map
                 int currentY = current.Index / Width;
                 foreach (Vector2Int neighbor in GetNeighbors(currentX, currentY))
                 {
+                    UnitData occupant =
+                        unitManager != null
+                            ? unitManager.GetUnitAt(neighbor.x, neighbor.y)
+                            : null;
+                    if (occupant != null)
+                    {
+                        bool allowPass =
+                            movingFaction != Faction.None &&
+                            occupant.faction == movingFaction &&
+                            neighbor.x != goalX &&
+                            neighbor.y != goalY;
+                        if (!allowPass)
+                        {
+                            continue;
+                        }
+                    }
+
                     int moveCost = GetMoveCost(neighbor.x, neighbor.y);
                     if (moveCost < 0)
                     {

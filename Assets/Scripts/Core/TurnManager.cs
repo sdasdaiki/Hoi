@@ -177,7 +177,13 @@ namespace EdoStrategy.Core
 
                 HexGrid grid = mapView.Grid;
                 List<Vector2Int> path =
-                    grid.FindPath(unit.x, unit.y, unit.plannedMoveX, unit.plannedMoveY);
+                    grid.FindPath(
+                        unit.x,
+                        unit.y,
+                        unit.plannedMoveX,
+                        unit.plannedMoveY,
+                        unit.faction,
+                        unitManager);
                 if (path == null || path.Count < 2)
                 {
                     Debug.LogWarning(
@@ -202,6 +208,23 @@ namespace EdoStrategy.Core
                     UnitData occupant = unitManager.GetUnitAt(step.x, step.y);
                     if (occupant != null)
                     {
+                        if (occupant.faction == unit.faction)
+                        {
+                            HexCell friendlyPassCell = grid.GetCell(step.x, step.y);
+                            TerrainDefinition friendlyPassTerrain =
+                                grid.GetTerrainDefinition(friendlyPassCell.terrainId);
+                            int friendlyPassCost = definition != null
+                                ? definition.GetMoveCost(friendlyPassTerrain)
+                                : grid.GetMoveCost(step.x, step.y);
+                            if (friendlyPassCost < 0 ||
+                                consumedMoveCost + friendlyPassCost >
+                                    unit.remainingMovePoints)
+                            {
+                                break;
+                            }
+                            consumedMoveCost += friendlyPassCost;
+                            continue;
+                        }
                         Debug.LogWarning(
                             string.Format(
                                 "予定移動中断: マスが占有されています ({0},{1})",
@@ -501,7 +524,13 @@ namespace EdoStrategy.Core
             }
 
             List<Vector2Int> path =
-                grid.FindPath(unit.x, unit.y, targetX, targetY);
+                grid.FindPath(
+                    unit.x,
+                    unit.y,
+                    targetX,
+                    targetY,
+                    unit.faction,
+                    unitManager);
             if (path == null || path.Count < 2)
             {
                 Debug.LogWarning(
