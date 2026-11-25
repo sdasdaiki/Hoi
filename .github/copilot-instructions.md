@@ -1,11 +1,11 @@
-# 江戸時代・ターン制ヘックスストラテジー 詳細開発設計書 (v4)
+# 江戸時代・ターン制ヘックスストラテジー 詳細開発設計書 (v4.1)
 
 ## 1. プロジェクト概要・開発環境
 - **コンセプト:** 江戸時代を舞台にしたターン制ヘックス（正六角形）ストラテジーゲーム。本陣（指令部隊）からの距離や地形に応じた「命令・報告の遅延（情報戦）」を核とし、プレイヤーと敵AIの双方が不完全情報下で戦う。将来的に Hearts of Iron IV (HoI4) のような師団設計・補給線・人的資源・偵察・構築物（城・要塞・塹壕）・伏兵といった高度な戦略要素を拡張できる設計とする。
 - **エンジン・バージョン:** Unity 2022.3.62f3 LTS (2D Universal Render Pipeline)
 - **使用言語:** C# (.NET Standard 2.1)
 - **進行形式:** ターン制 (Turn-Based / WeGo同時解決方式)
-- **名前空間（Namespace）:** 機能ごとに `EdoStrategy.Core` / `EdoStrategy.Map` / `EdoStrategy.MapEditor` / `EdoStrategy.Units` / `EdoStrategy.Combat` / `EdoStrategy.Command` / `EdoStrategy.AI` / `EdoStrategy.UI` に所属させる（既存のPhase 1〜3スクリプトの名前空間・クラス名がある場合は互換性を維持すること）。
+- **名前空間（Namespace）:** 機能ごとに `EdoStrategy.Core` / `EdoStrategy.Map` / `EdoStrategy.MapEditor` / `EdoStrategy.Units` / `EdoStrategy.Combat` / `EdoStrategy.Command` / `EdoStrategy.AI` / `EdoStrategy.UI` に所属させる（既存のPhase 1〜3.5スクリプトの名前空間・クラス名がある場合は互換性を維持すること）。
 
 ---
 
@@ -26,7 +26,7 @@
 5. **Unity `JsonUtility` シリアライズ制約の遵守:**
    - JSON保存対象のデータクラスでは、`Dictionary`、`Queue`、`Stack`、2次元配列 `[,]` を使用しない。グリッドは 1次元配列 `HexCell[]`（`y * width + x`）、命令キューは `List<Order>` の先頭（インデックス `0`）を処理する方式で実装する。
 6. **整数千分率（Permille）による高解像度数値演算:**
-   - ステータス補正・地形補正・包囲ペナルティ・組織率・補給率はすべて **千分率整数（`int`, `1000` = `100.0%` = `1.0倍`）** で定義・演算し、端数切り捨てによる数値潰れを防ぐ。
+   - ステータス補正・地形補正・包囲ペナルティ・過密ペナルティ・組織率・補給率はすべて **千分率整数（`int`, `1000` = `100.0%` = `1.0倍`）** で定義・演算し、端数切り捨てによる数値潰れを防ぐ。
 
 ---
 
@@ -97,7 +97,7 @@
     - `Units/` : `UnitDefinition` アセット（HeadquartersUnit, InfantryUnit, MusketeerUnit, CavalryUnit, ArtilleryUnit ※作成済み）
   - `Maps/` : マップエディタで保存されるJSONマップデータ
   - `Prefabs/`
-    - `Units/` : HoI4式カウンタープレハブ（兵科アイコン・スタック数・縦棒2本ゲージ・ゴースト）
+    - `Units/` : HoI4式四角形カウンタープレハブ（兵科アイコン・スタック数・縦棒2本ゲージ・ゴースト）
     - `UI/` : 地形パレットボタン、スタック内ユニット一覧カードプレハブ
   - `Scenes/`
     - `TitleScene.unity` : タイトル・マップ選択画面
@@ -105,15 +105,15 @@
     - `BattleScene.unity` : メインの戦闘・戦略シミュレーションシーン
   - `Scripts/`
     - `Core/`
-      - `GameEnums.cs` : `Faction`, `OrderType`, `BattleState` の定義（実装済み・拡張）
+      - `GameEnums.cs` : `Faction`, `OrderType`, `BattleState` の定義（実装済み）
       - `GameIds.cs` : `TerrainIds`, `UnitTypeIds` の定数定義（実装済み）
       - `GameManager.cs` : マスターデータレジストリ保持、シーン間のマップJSON受け渡し（実装済み）
       - `TurnManager.cs` : バトルのステートマシン管理・操作コマンド受付（実装済み・拡張）
     - `Map/`
-      - `HexCoordinates.cs` : Odd-R ⇔ Axial変換、距離計算、隣接探索、方向インデックス判定（実装済み・拡張）
+      - `HexCoordinates.cs` : Odd-R ⇔ Axial変換、距離計算、隣接探索、方向インデックス判定（実装済み）
       - `TerrainDefinition.cs` : 地形マスターデータ（ScriptableObject・実装済み）
       - `HexCell.cs` : 1マスごとのデータ（実装済み・拡張）
-      - `HexGrid.cs` : マップ全体の1次元セル配列管理、移動コスト計算、A*パスファインディング（実装済み・拡張）
+      - `HexGrid.cs` : マップ全体の1次元セル配列管理、移動コスト計算、A*パスファインディング（実装済み）
       - `HexTilemapView.cs` : `HexGrid` の変更イベントを受け取り `Tilemap` を更新するView（実装済み）
       - `MapSerializer.cs` : `MapSaveData` のJSONシリアライズ・ファイル保存/読込（実装済み）
     - `MapEditor/`（※Unity予約語 `Editor` を避けるため `MapEditor` フォルダを使用・実装済み）
@@ -122,14 +122,14 @@
       - `UnitDefinition.cs` : 兵科マスターデータ（ScriptableObject・実装済み・`antiStructureAttack` 追加）
       - `BattalionData.cs` : 大隊データ（師団設計の最小構成単位・実装済み）
       - `UnitData.cs` : 師団（部隊）データ（兵員数、組織率、補給、残り移動力、命令リスト・実装済み）
-      - `UnitManager.cs` : 全生存部隊のリスト管理、座標からの全スタック部隊検索（`GetUnitsAt`）、移動・敗走・消滅処理（実装済み・拡張）
-      - `HexStackCounterView.cs` : **HoI4式マップカウンター1枠の描画**（兵科アイコン、同種スタック数表示、組織率＆兵員数の縦棒2本ゲージ、選択枠）
-      - `UnitBoardView.cs` : マスごとの部隊を兵科別にグルーピングして `HexStackCounterView` を配置・更新し、命令矢印・ハイライトを描画するView
+      - `UnitManager.cs` : 全生存部隊のリスト管理、座標からの全スタック部隊検索（`GetUnitsAt`）、移動・敗走・消滅処理（実装済み）
+      - `HexStackCounterView.cs` : **HoI4式四角形マップカウンター1枠の描画**（兵科アイコン、同種スタック数表示、組織率＆兵員数の縦棒2本ゲージ、選択枠・実装済み）
+      - `UnitBoardView.cs` : マスごとの部隊を兵科別にグルーピングして `HexStackCounterView` を配置・更新し、命令矢印・ハイライト・移動アニメーションを描画するView（実装済み）
     - `Combat/`
       - `UnitModifier.cs` : 戦闘・移動・視界・遅延などあらゆる補正を動的リストで扱う汎用修飾子
-      - `CombatResolver.cs` : 包囲判定、修飾子集約、突破力・対物攻撃力・兵員・組織率ダメージ計算、敗走退避・占領前進処理エンジン
+      - `CombatResolver.cs` : 包囲判定、過密スタック混乱判定、攻撃中防御低下判定、修飾子集約、突破力・対物攻撃力・兵員・組織率ダメージ計算、敗走退避・占領前進処理エンジン
     - `Command/`
-      - `Order.cs` : 命令データ（種別、目標座標、対象ユニットID、経由パス、残り遅延ターン数）
+      - `Order.cs` : 命令データ（種別、目標座標、対象ユニットID、経由パス、残り遅延ターン数・実装済み）
       - `CommandDelaySystem.cs` : 最も近い司令部からの経路コストに基づく遅延計算と命令キュー進行
       - `IntelReport.cs` : 偵察報告データ（発見敵ID、目撃座標、目撃ターン、到着までの残りターン数）
       - `FactionIntelState.cs` : 陣営ごとの視界マップと既知の敵情報（ゴースト・陳腐化管理）
@@ -137,8 +137,9 @@
     - `AI/`
       - `EnemyAIController.cs` : 敵陣営の `FactionIntelState` のみを参照し、`CommandDelaySystem` 経由で命令を発行するAIロジック
     - `UI/`
+      - `BattleCameraController.cs` : マウスホイールのズームおよびパン操作（実装済み）
       - `MapEditorUI.cs` : 地形パレット、陣営エリアブラシ、マップ名入力、保存ボタン（実装済み）
-      - `BattleUI.cs` : **マス目左クリック時の全スタック部隊一覧パネル**、個別選択・命令操作UI、ターン終了ボタン、勝敗リザルトパネル
+      - `BattleUI.cs` : **マス目左クリック時の全スタック部隊一覧パネル**、個別・複数選択、命令操作UI、ターン終了ボタン、勝敗リザルトパネル（実装済み・拡張）
   - `Tiles/` : 単色の正六角形Tileアセット（Plain, Forest, Mountain, River ※作成済み）
 
 ---
@@ -266,7 +267,7 @@
     [System.Serializable]
     public class UnitModifier
     {
-        public string sourceId;                     // 例: "terrain_mountain", "flank_pincer", "low_supply"
+        public string sourceId;                     // 例: "terrain_mountain", "flank_pincer", "overstacking"
         public string displayName;                  // UI表示用名称
         public int attackMultiplier = 1000;         // 攻撃倍率 (千分率)
         public int antiStructureMultiplier = 1000;  // 対物攻撃倍率 (千分率)
@@ -285,9 +286,23 @@
 - **挟撃（Crossfire）:** 方向インデックス差 `2`（120度）のペアあり → `defenseMultiplier = 750`, `orgDamageMultiplier = 1300`
 - **側面攻撃（Flanked）:** 上記以外で $|E| \ge 2$ → `defenseMultiplier = 850`, `orgDamageMultiplier = 1150`
 
+#### 連携防衛・過密スタックペナルティ（Overstacking Penalty）
+1マスに大量の部隊を詰め込む（デススタック）戦術を防ぐため、同一マスにいる味方部隊数に応じて以下の修飾子を適用する：
+- **基本許容上限:** 1マスあたり **`2` 部隊** までペナルティなし。
+- **司令部による統制緩和:** 同一マスに自陣営の司令部（`commandLevel >= 1`）が存在する場合、許容上限が **`+1` 緩和（`3` 部隊までペナルティなし）** される。
+- **上限超過時のペナルティ（超過 1 部隊につき加算）:**
+  - **防御側として戦闘時:** `defenseMultiplier` を `-100`（-10%・下限 `500`）、`orgDamageMultiplier` を `+100`（+10%）する。
+  - **攻撃側として戦闘時:** `attackMultiplier` を `-100`（-10%・下限 `500`）する（狭い戦線で展開しきれない表現）。
+
+#### 攻撃中ユニットの無防備ペナルティ（Attacking Exposure / Counter-Attack Vulnerability）
+同時解決フェーズにおいて「攻撃中の部隊が別の敵から横槍攻撃を受けた場合」の挙動を以下のように定義する：
+- **攻撃命令自体はキャンセルされない:** 攻撃中に別方向から攻撃を受けても、自らの攻撃命令は取り消されず続行される。
+- **防御低下修飾子の適用:** そのターンに有効な攻撃命令（`OrderType.Attack`）を実行予定の部隊は、前傾姿勢で攻撃に集中しているため、他部隊から攻撃を受けた際に **`defenseMultiplier = 800`（防御 -20%）、`orgDamageMultiplier = 1200`（被組織率ダメージ +20%）** の修飾子を受ける。
+- **解決順による事前脱落:** 解決順序（射程の長い順等）において、自分の攻撃を実行する**前**に他からの攻撃ダメージで兵員 `<= 0` または `organization <= 0`（敗走）となった場合は、その時点で戦線離脱となり自身の攻撃は不発となる。
+
 #### ダメージ計算式（千分率演算）
-- 有効攻撃力 $A_{eff}$ = $\lfloor \sum (\text{baseAttack} \times \frac{\text{currentManpower}}{\text{maxManpower}} \times \frac{\text{equipmentRatio}}{1000}) \times \frac{\text{supplyStatus}}{1000} \times \prod \frac{\text{attackMultiplier}}{1000} \rfloor$
-- 有効対物攻撃力 $AS_{eff}$ = $\lfloor \sum (\text{antiStructureAttack} \times \frac{\text{currentManpower}}{\text{maxManpower}} \times \frac{\text{equipmentRatio}}{1000}) \times \prod \frac{\text{antiStructureMultiplier}}{1000} \rfloor$ *(※将来の塹壕・要塞・城の防御ボーナス相殺・構築物耐久削りに使用)*
+- 有効攻撃力 $A_{eff}$ = $\lfloor \sum (\text{baseAttack} \times \frac{\text{currentManpower}}{\text{maxManpower}} \times \frac{\text{equipmentRatio}}{1000}) \times \frac{\text{supplyStatus}}{1000} \times \frac{\text{organization}}{1000} \times \prod \frac{\text{attackMultiplier}}{1000} \rfloor$ *(※`equipmentRatio` は Phase 4 時点では `1000` 固定)*
+- 有効対物攻撃力 $AS_{eff}$ = $\lfloor \sum (\text{antiStructureAttack} \times \frac{\text{currentManpower}}{\text{maxManpower}} \times \frac{\text{equipmentRatio}}{1000}) \times \prod \frac{\text{antiStructureMultiplier}}{1000} \rfloor$ *(※将来の塹壕・要塞・城の防御ボーナス減衰・耐久削りに適用)*
 - 有効突破力 $B_{eff}$ = $\lfloor \sum (\text{breakthrough} \times \frac{\text{currentManpower}}{\text{maxManpower}} \times \frac{\text{equipmentRatio}}{1000}) \times \prod \frac{\text{breakthroughMultiplier}}{1000} \rfloor$
 - 有効防御力 $D_{eff}$ = $\lfloor \sum (\text{baseDefense} \times \frac{\text{currentManpower}}{\text{maxManpower}}) \times \frac{\text{terrainDefenseMultiplier}}{1000} \times \prod \frac{\text{defenseMultiplier}}{1000} \rfloor$
 - 実質防御力 $D_{net}$ = $\max\left(50,\ D_{eff} - \lfloor B_{eff} \times 0.3 \rfloor\right)$
@@ -295,24 +310,26 @@
   *(複数大隊がいる場合は現在兵員数比率で按分し、端数は先頭大隊へ寄せる)*
 - **組織率ダメージ（Org Loss）:** $\max\left(15,\ \lfloor \frac{A_{eff} \times 1000}{D_{net} + 200} \times \prod \frac{\text{orgDamageMultiplier}}{1000} \rfloor\right)$
 - **反撃（Counter-Attack）の発生条件と計算:**
-  - 防御側が攻撃ダメージを受けた後でも生存（`CurrentTotalManpower > 0` かつ `organization > 0`）しており、かつ**防御側の `attackRange >= 攻撃側までのヘックス距離`** の場合のみ反撃が発生する。
+  - 防御側がダメージを受けた後でも生存（`CurrentTotalManpower > 0` かつ `organization > 0`）しており、かつ**防御側の `attackRange >= 攻撃側までのヘックス距離`** の場合のみ反撃が発生する。
   - 反撃ダメージは防御側の `baseDefense`（または攻撃力の `700` 倍率）をベースに算出し、攻撃側へ兵員・組織率ダメージを与える。
 
-#### 複数スタック戦闘・移動ロック・敗走・占領・自然回復ルール
-1. **複数スタック戦闘:**
+#### 複数スタック戦闘・移動ロック・敗走・占領・自然回復・解決順序ルール
+1. **同時攻撃の解決順序:**
+   - 同一ターンに複数部隊が攻撃を行う場合、**射程（`attackRange`）が長い順**（砲兵 → 銃兵 → 歩兵・騎兵）に解決する。
+2. **複数スタック戦闘:**
    - 攻撃対象マスに複数の敵ユニットが存在する場合、防衛側の主力ユニット（組織率・防御力が最も高いユニット）と交戦し、防衛側スタック全体でダメージを分担・適用する。
-2. **攻撃による移動ロック（釘付け／Pinning）:**
+3. **攻撃による移動ロック（釘付け／Pinning）:**
    - そのターンに有効な攻撃命令（`OrderType.Attack`）の攻撃対象マスに指定されている部隊は、戦闘が解決されるまで移動命令（`OrderType.Move`）を実行できずその場に釘付けとなる。
-3. **敗走（Rout）と退避:**
+4. **敗走（Rout）と退避:**
    - 戦闘ダメージにより `CurrentTotalManpower <= 0` となった部隊は**消滅（壊滅）**する。
-   - 兵員は生存しているが `organization <= 0` となった部隊は**敗走（Rout）**となり、攻撃元の**反対側（後方3マス：真後ろの方向を最優先、なければ他方向）にある「敵がいない進入可能マス（味方スタックへの合流可）」**へ1マス退避する。
+   - 兵員は生存しているが `organization <= 0` となった部隊（総大将本陣 `commandLevel >= 2` も含む）は**敗走（Rout）**となり、攻撃元の**反対側（後方3マス：真後ろの方向を最優先、なければ他方向）にある「敵がいない進入可能マス（味方スタックへの合流可）」**へ1マス退避する。
    - 敵ユニットと進入不可地形に完全に囲まれて退避可能なマスが1つもない場合は、退路断絶により**消滅（壊滅）**する。
    - 敗走退避に成功して生き残った部隊は、組織率が **`250`（25.0%）** まで復帰する。
-4. **空きマスへの前進・占領ルール:**
+5. **空きマスへの前進・占領ルール:**
    - 戦闘によって防衛側マスの**全敵部隊**が消滅または敗走退避してマスが空いた場合、以下の優先順位で攻撃側部隊がそのマスへ進入する：
      1. そのマスへ今ターン実行予定の移動命令（`OrderType.Move`）を出していた攻撃側部隊。
      2. 上記がなければ、トドメを刺した攻撃側が**近接兵科（`attackRange == 1`）**の場合のみ前進して占領する（銃兵・砲兵などの遠距離兵科は、移動命令がない限り前進しない）。
-5. **ターン終了時の自然回復（非戦闘部隊のみ）:**
+6. **ターン終了時の自然回復（非戦闘部隊のみ）:**
    - そのターンに攻撃も被弾（防御）もしていない部隊は、ターン終了時（`ReconAndReportPhase`）に以下が回復する：
      - **組織率：** `+150`（15.0%）回復（上限 `maxOrganization`）。
      - **兵員数（`currentManpower`）：** 隣接6マスにいる敵部隊数に応じて回復率が決まる。
@@ -405,12 +422,12 @@
 2. **`PlayerCommandPhase`（プレイヤー命令フェーズ）:**
    - マス目左クリックでマス内の全ユニット一覧を表示し、個別選択またはスタック一括選択。
    - 移動先（`OrderType.Move`）または射程内の敵マスへの攻撃対象（`OrderType.Attack`）を指定して `Order` を `pendingOrders` に登録（待機中命令のキャンセル・上書きも可能）。
-   - 「ターン終了」ボタンで `ExecutionPhase` へ遷移。
+   - 「ターン終了」ボタンで選択状態を強制解除し、`ExecutionPhase` へ遷移。
 3. **`ExecutionPhase`（解決フェーズ）:**
    - **ステップA（AI命令登録）:** 敵AI（`EnemyAIController`）が敵陣営の認識情報に基づき命令を発行（`CommandDelaySystem` 経由で遅延付与）。
    - **ステップB（遅延カウント進行）:** 両陣営の全生存部隊の `pendingOrders[0]` の `remainingDelayTurns` を `-1` し、`0` 以下になった命令を実行対象とする。
    - **ステップC（移動の一斉解決）:** 今ターン有効な `OrderType.Attack` の攻撃対象マスに指定されている部隊は「釘付け（移動ロック）」となり移動不可。それ以外の実行対象 `OrderType.Move` を解決する（途中で伏兵・未発見の敵と接触した場合はその1マス手前で停止）。
-   - **ステップD（戦闘の一斉解決と敗走・占領処理）:** 移動完了後の配置を基準に、実行対象の全 `OrderType.Attack` 命令を解決する。ダメージ計算・反撃処理の後、組織率0の敗走退避を実行し、空いたマスに対して「①移動予約済みの攻撃側部隊 ＞ ②近接攻撃（射程1）による占領前進」を適用する。
+   - **ステップD（戦闘の一斉解決と敗走・占領処理）:** 移動完了後の配置を基準に、射程（`attackRange`）が長い順に実行対象の全 `OrderType.Attack` 命令を解決する。ダメージ計算・反撃処理の後、組織率0の敗走退避を実行し、空いたマスに対して「①移動予約済みの攻撃側部隊 ＞ ②近接攻撃（射程1）による占領前進」を適用する。
 4. **`ReconAndReportPhase`（視界・伝令更新・自然回復フェーズ）:**
    - `FogOfWarSystem` によりプレイヤー・敵AI双方の視界再計算、偵察報告タイマー進行、陳腐化したゴーストの削除・更新イベントを発火。
    - そのターンに攻撃も被弾（防御）もしていない非戦闘部隊に対し、組織率（`+150`）および隣接敵数に応じた兵員数（`5%` / `2%` / `0%`）の自然回復を実行する。
@@ -424,11 +441,7 @@
 ## 8. 段階的実装ステップ（Copilotへの指示順序）
 1. **Phase 1（マップ基盤と描画・完了済み）:** `HexCoordinates.cs` / `TerrainDefinition.cs` / `HexCell.cs` / `HexGrid.cs` / `HexTilemapView.cs`
 2. **Phase 2（マップエディタとJSON保存・完了済み）:** `MapSerializer.cs` / `MapEditorController.cs`（`Scripts/MapEditor/`）/ `MapEditorUI.cs`
-3. **Phase 3（ユニット配置と基本移動・完了済み）:** `GameEnums.cs` / `GameIds.cs` / `UnitDefinition.cs` / `BattalionData.cs` / `UnitData.cs` / `UnitManager.cs` / `UnitView.cs` / `UnitBoardView.cs` / `TurnManager.cs`
-4. **Phase 3.5（HoI4式無制限スタック・カウンター描画・マス内一覧UIへの改修・次ステップ）:**
-   - `UnitManager` / `HexGrid` / `TurnManager` の1マス1部隊制限を撤廃し、同一陣営の無制限スタックに対応。
-   - `HexStackCounterView.cs` / `UnitBoardView.cs` を実装し、同一マスの同種ユニットまとめ＋横数値表示＋縦棒2本ゲージ（組織率・兵員数）＋複数兵科の並列表現を実装。
-   - `BattleUI.cs` にマス目左クリック時の「選択マス部隊一覧パネル」を実装。
-5. **Phase 4（戦闘・包囲・敗走計算と勝敗判定）:** `UnitModifier.cs` / `CombatResolver.cs` を実装し、包囲ペナルティ・突破力・対物攻撃力・反撃・敗走退避・自然回復・本陣撃破による勝敗リザルトを実装する。
-6. **Phase 5（命令・報告遅延システムとフェアな敵AI）:** `Order.cs` / `CommandDelaySystem.cs` / `IntelReport.cs` / `FactionIntelState.cs` / `FogOfWarSystem.cs` / `EnemyAIController.cs` を実装し、両陣営に適用される命令遅延とゴースト表示（および陳腐化消滅）を実装する。
-7. **Phase 6（HoI4ライクな戦略拡張・操作チューニング）:** `HexCell.infrastructureLevel` を用いた補給線（兵站ルートと補給切れペナルティ、A*経路キャッシュ）、師団編成UI（複数 `BattalionData` の編集）、兵士人口（Manpower）プールからの補充、構築物（城・要塞・塹壕）、およびPC向けキーボードショートカット・操作キー配置の最適化を行う。
+3. **Phase 3 & 3.5（ユニット配置・基本移動・HoI4式無制限スタック・四角形カウンター・複数選択UI・完了済み）:** `GameEnums.cs` / `GameIds.cs` / `UnitDefinition.cs` / `BattalionData.cs` / `UnitData.cs` / `UnitManager.cs` / `HexStackCounterView.cs` / `UnitBoardView.cs` / `BattleCameraController.cs` / `TurnManager.cs` / `BattleUI.cs`
+4. **Phase 4（戦闘・包囲・過密混乱・敗走計算と勝敗判定・現在地）:** `UnitModifier.cs` / `CombatResolver.cs` を実装し、包囲ペナルティ・過密スタック混乱・攻撃中防御低下・突破力・対物攻撃力・反撃・敗走退避・自然回復・本陣撃破による勝敗リザルトを実装する。
+5. **Phase 5（命令・報告遅延システムとフェアな敵AI）:** `Order.cs` / `CommandDelaySystem.cs` / `IntelReport.cs` / `FactionIntelState.cs` / `FogOfWarSystem.cs` / `EnemyAIController.cs` を実装し、両陣営に適用される命令遅延とゴースト表示（および陳腐化消滅）を実装する。
+6. **Phase 6（HoI4ライクな戦略拡張・操作チューニング）:** `HexCell.infrastructureLevel` を用いた補給線（兵站ルートと補給切れペナルティ、A*経路キャッシュ）、師団編成UI（複数 `BattalionData` の編集）、兵士人口（Manpower）プールからの補充、構築物（城・要塞・塹壕）、およびPC向けキーボードショートカット・操作キー配置の最適化を行う。
