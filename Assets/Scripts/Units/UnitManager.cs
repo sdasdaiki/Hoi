@@ -12,6 +12,11 @@ namespace EdoStrategy.Units
 
         public event Action<UnitData> UnitAdded;
         public event Action<UnitData> UnitMoved;
+        public event Action<
+            UnitData,
+            Vector2Int,
+            Vector2Int,
+            IReadOnlyList<Vector2Int>> UnitMovedAlongPath;
         public event Action<UnitData> UnitRemoved;
 
         public IReadOnlyList<UnitData> Units
@@ -137,12 +142,28 @@ namespace EdoStrategy.Units
 
         public bool TryMoveUnit(UnitData unit, int targetX, int targetY)
         {
-            if (unit == null)
-            {
-                return false;
-            }
+            Vector2Int from = unit == null
+                ? Vector2Int.zero
+                : new Vector2Int(unit.x, unit.y);
+            return MoveUnitAlongPath(
+                unit,
+                targetX,
+                targetY,
+                new List<Vector2Int>
+                {
+                    from,
+                    new Vector2Int(targetX, targetY)
+                });
+        }
 
-            if (grid != null && !grid.IsInBounds(targetX, targetY))
+        public bool MoveUnitAlongPath(
+            UnitData unit,
+            int targetX,
+            int targetY,
+            IReadOnlyList<Vector2Int> path)
+        {
+            if (unit == null ||
+                grid != null && !grid.IsInBounds(targetX, targetY))
             {
                 return false;
             }
@@ -150,14 +171,30 @@ namespace EdoStrategy.Units
             List<UnitData> occupants = GetUnitsAt(targetX, targetY);
             for (int i = 0; i < occupants.Count; i++)
             {
-                if (occupants[i].faction != unit.faction)
+                if (occupants[i] != unit &&
+                    occupants[i].faction != unit.faction)
                 {
                     return false;
                 }
             }
 
+            Vector2Int from = new Vector2Int(unit.x, unit.y);
+            Vector2Int to = new Vector2Int(targetX, targetY);
+            var movementPath = path != null
+                ? new List<Vector2Int>(path)
+                : new List<Vector2Int>();
+            if (movementPath.Count == 0 || movementPath[0] != from)
+            {
+                movementPath.Insert(0, from);
+            }
+            if (movementPath[movementPath.Count - 1] != to)
+            {
+                movementPath.Add(to);
+            }
+
             unit.x = targetX;
             unit.y = targetY;
+            UnitMovedAlongPath?.Invoke(unit, from, to, movementPath);
             UnitMoved?.Invoke(unit);
             return true;
         }

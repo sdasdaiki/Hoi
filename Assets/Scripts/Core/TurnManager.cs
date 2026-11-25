@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using EdoStrategy.Command;
 using EdoStrategy.Map;
+using EdoStrategy.UI;
 using EdoStrategy.Units;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -19,6 +20,7 @@ namespace EdoStrategy.Core
         [SerializeField] private bool spawnTestUnitsOnStart = true;
         [SerializeField] private string loadMapName = "";
 
+        private BattleCameraController battleCameraController;
         public event System.Action OnCommandStateChanged;
         public event System.Action<int, int, List<UnitData>>
             OnCellUnitsSelected;
@@ -76,7 +78,10 @@ namespace EdoStrategy.Core
                 return;
             }
 
-            if (Input.GetMouseButtonDown(0))
+            if (Input.GetMouseButtonDown(0) &&
+                !Input.GetMouseButton(2) &&
+                (battleCameraController == null ||
+                 !battleCameraController.IsPanning))
             {
                 HandleCellClick(Input.mousePosition);
             }
@@ -239,7 +244,22 @@ namespace EdoStrategy.Core
         {
             yield return null;
 
-            ExecutePlannedMoves();
+            bool movedUnits = ExecutePlannedMoves();
+            if (movedUnits)
+            {
+                if (unitBoardView != null &&
+                    unitBoardView.IsAnimatingUnits)
+                {
+                    while (unitBoardView.IsAnimatingUnits)
+                    {
+                        yield return null;
+                    }
+                }
+                else
+                {
+                    yield return new WaitForSeconds(0.35f);
+                }
+            }
             yield return null;
 
             State = BattleState.ReconAndReportPhase;
@@ -258,13 +278,14 @@ namespace EdoStrategy.Core
             State = BattleState.PlayerCommandPhase;
         }
 
-        private void ExecutePlannedMoves()
+        private bool ExecutePlannedMoves()
         {
             if (unitManager == null)
             {
-                return;
+                return false;
             }
 
+            bool movedUnits = false;
             for (int pass = 0; pass <= unitManager.Units.Count; pass++)
             {
                 bool anyMoved = false;
@@ -300,7 +321,10 @@ namespace EdoStrategy.Core
                     int consumedMoveCost = 0;
                     int fromX = unit.x;
                     int fromY = unit.y;
-                    bool movedThisPass = false;
+                    var traversedPath = new List<Vector2Int>
+                    {
+                        new Vector2Int(fromX, fromY)
+                    };
 
                     for (int i = 1; i < path.Count; i++)
                     {
@@ -334,21 +358,25 @@ namespace EdoStrategy.Core
                             break;
                         }
 
-                        if (!unitManager.MoveUnit(unit, step.x, step.y))
-                        {
-                            break;
-                        }
                         consumedMoveCost += moveCost;
-                        movedThisPass = true;
-                        anyMoved = true;
+                        traversedPath.Add(step);
                     }
 
-                    unit.remainingMovePoints -= consumedMoveCost;
+                    bool movedThisPass =
+                        traversedPath.Count > 1 &&
+                        unitManager.MoveUnitAlongPath(
+                            unit,
+                            traversedPath[traversedPath.Count - 1].x,
+                            traversedPath[traversedPath.Count - 1].y,
+                            traversedPath);
                     if (!movedThisPass)
                     {
                         continue;
                     }
 
+                    unit.remainingMovePoints -= consumedMoveCost;
+                    anyMoved = true;
+                    movedUnits = true;
                     unit.pendingOrders.Remove(moveOrder);
                     OnCommandStateChanged?.Invoke();
                     Debug.Log(
@@ -367,6 +395,7 @@ namespace EdoStrategy.Core
                     break;
                 }
             }
+            return movedUnits;
         }
 
         private void ResetRemainingMovePoints()
@@ -808,6 +837,17 @@ namespace EdoStrategy.Core
             if (battleCamera == null)
             {
                 battleCamera = Camera.main;
+            }
+            if (battleCamera != null)
+            {
+                battleCameraController =
+                    battleCamera.GetComponent<BattleCameraController>();
+                if (battleCameraController == null)
+                {
+                    battleCameraController =
+                        battleCamera.gameObject
+                            .AddComponent<BattleCameraController>();
+                }
             }
         }
 

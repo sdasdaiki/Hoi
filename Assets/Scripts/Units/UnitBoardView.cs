@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using EdoStrategy.Core;
 using EdoStrategy.Map;
@@ -19,6 +20,8 @@ namespace EdoStrategy.Units
             new Dictionary<UnitData, UnitView>();
         private readonly List<HexStackCounterView> counters =
             new List<HexStackCounterView>();
+        private readonly HashSet<UnitData> animatingUnits =
+            new HashSet<UnitData>();
         private TurnManager turnManager;
         private readonly List<SpriteRenderer> reachableHighlights =
             new List<SpriteRenderer>();
@@ -30,6 +33,10 @@ namespace EdoStrategy.Units
         public UnitManager UnitManager
         {
             get { return unitManager; }
+        }
+        public bool IsAnimatingUnits
+        {
+            get { return animatingUnits.Count > 0; }
         }
 
         private void Awake()
@@ -55,6 +62,7 @@ namespace EdoStrategy.Units
 
             unitManager.UnitAdded += OnUnitAdded;
             unitManager.UnitMoved += OnUnitMoved;
+            unitManager.UnitMovedAlongPath += OnUnitMovedAlongPath;
             unitManager.UnitRemoved += OnUnitRemoved;
 
             if (turnManager == null)
@@ -124,6 +132,10 @@ namespace EdoStrategy.Units
             foreach (UnitData unit in unitManager.Units)
             {
                 if (unit == null || !unit.IsAlive)
+                {
+                    continue;
+                }
+                if (animatingUnits.Contains(unit))
                 {
                     continue;
                 }
@@ -492,6 +504,7 @@ namespace EdoStrategy.Units
 
             unitManager.UnitAdded -= OnUnitAdded;
             unitManager.UnitMoved -= OnUnitMoved;
+            unitManager.UnitMovedAlongPath -= OnUnitMovedAlongPath;
             unitManager.UnitRemoved -= OnUnitRemoved;
         }
 
@@ -517,14 +530,129 @@ namespace EdoStrategy.Units
             RefreshAllViews();
         }
 
-        private void OnUnitMoved(UnitData unit)
+        private void OnUnitMovedAlongPath(
+            UnitData unit,
+            Vector2Int from,
+            Vector2Int to,
+            IReadOnlyList<Vector2Int> path)
         {
+            if (unit == null || !animatingUnits.Add(unit))
+            {
+                return;
+            }
+
             UnitView view;
             if (unit != null && views.TryGetValue(unit, out view))
             {
                 view.Refresh();
             }
+
+            RefreshCounters();
+            var worldPath = new List<Vector3>();
+            if (path != null)
+            {
+                for (int i = 0; i < path.Count; i++)
+                {
+                    worldPath.Add(GetCellWorldPosition(path[i].x, path[i].y));
+                }
+            }
+            if (worldPath.Count == 0 ||
+                path == null ||
+                path.Count == 0 ||
+                path[0] != from)
+            {
+                worldPath.Insert(0, GetCellWorldPosition(from.x, from.y));
+            }
+            if (path == null ||
+                path.Count == 0 ||
+                path[path.Count - 1] != to)
+            {
+                worldPath.Add(GetCellWorldPosition(to.x, to.y));
+            }
+
+            UnitDefinition definition = gameManager != null
+                ? gameManager.GetUnitDefinition(GetUnitTypeId(unit))
+                : null;
+            Vector3 startPosition =
+                GetCellWorldPosition(from.x, from.y);
+            GameObject movingCounterObject =
+                new GameObject("Moving Hex Stack Counter");
+            movingCounterObject.transform.SetParent(unitContainer, false);
+            movingCounterObject.transform.position = startPosition;
+
+            HexStackCounterView movingCounter =
+                movingCounterObject.AddComponent<HexStackCounterView>();
+            float cellWidth = tilemap != null
+                ? Mathf.Abs(tilemap.cellSize.x)
+                : 1f;
+            float cellHeight = tilemap != null
+                ? Mathf.Abs(tilemap.cellSize.y)
+                : 1f;
+            movingCounter.Initialize(
+                new[] { unit },
+                definition,
+                GetUnitTypeId(unit),
+                startPosition,
+                new Vector2(cellWidth * 0.76f, cellHeight * 0.25f),
+                turnManager != null && turnManager.IsUnitSelected(unit));
+            StartCoroutine(
+                AnimateUnitCounter(unit, movingCounter, worldPath));
+        }
+
+        private void OnUnitMoved(UnitData unit)
+        {
+            if (unit == null || animatingUnits.Contains(unit))
+            {
+                return;
+            }
+
+            UnitView view;
+            if (views.TryGetValue(unit, out view) && view != null)
+            {
+                view.Refresh();
+            }
             RefreshAllViews();
+        }
+
+        private IEnumerator AnimateUnitCounter(
+            UnitData unit,
+            HexStackCounterView movingCounter,
+            List<Vector3> worldPath)
+        {
+            const float segmentDuration = 0.3f;
+            for (int i = 1; i < worldPath.Count; i++)
+            {
+                Vector3 start = movingCounter.transform.position;
+                Vector3 end = worldPath[i];
+                end.z = start.z;
+                float elapsed = 0f;
+                while (elapsed < segmentDuration)
+                {
+                    elapsed += Time.unscaledDeltaTime;
+                    float progress = Mathf.Clamp01(
+                        elapsed / segmentDuration);
+                    movingCounter.transform.position =
+                        Vector3.Lerp(start, end, progress);
+                    yield return null;
+                }
+                movingCounter.transform.position = end;
+            }
+
+            if (movingCounter != null)
+            {
+                Destroy(movingCounter.gameObject);
+            }
+            animatingUnits.Remove(unit);
+            RefreshAllViews();
+        }
+
+        private Vector3 GetCellWorldPosition(int x, int y)
+        {
+            Vector3 position = tilemap != null
+                ? tilemap.GetCellCenterWorld(new Vector3Int(x, y, 0))
+                : new Vector3(x, y, 0f);
+            position.z -= 0.2f;
+            return position;
         }
 
         private void OnUnitRemoved(UnitData unit)
