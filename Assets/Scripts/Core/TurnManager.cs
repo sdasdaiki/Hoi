@@ -72,6 +72,12 @@ namespace EdoStrategy.Core
                 return;
             }
 
+            if (Input.GetKeyDown(KeyCode.H) &&
+                !BattleUI.IsInputFieldFocused())
+            {
+                ClearAllOrdersForSelectedUnits();
+            }
+
             if (EventSystem.current != null &&
                 EventSystem.current.IsPointerOverGameObject())
             {
@@ -133,10 +139,7 @@ namespace EdoStrategy.Core
                 }
             }
 
-            selectedUnit = selectedUnits.Count > 0
-                ? selectedUnits[0]
-                : null;
-            OnCommandStateChanged?.Invoke();
+            NotifySelectionChanged();
         }
 
         public void ToggleUnitSelection(UnitData unit)
@@ -157,6 +160,75 @@ namespace EdoStrategy.Core
                 selectedUnits.Add(unit);
             }
 
+            NotifySelectionChanged();
+        }
+
+        public void ToggleCellUnitSelection(IEnumerable<UnitData> unitsAtCell)
+        {
+            var playerUnits = new List<UnitData>();
+            if (unitsAtCell != null)
+            {
+                foreach (UnitData unit in unitsAtCell)
+                {
+                    if (unit != null &&
+                        unit.faction == Faction.Player &&
+                        unit.IsAlive &&
+                        !playerUnits.Contains(unit))
+                    {
+                        playerUnits.Add(unit);
+                    }
+                }
+            }
+            if (playerUnits.Count == 0)
+            {
+                return;
+            }
+
+            bool allSelected = true;
+            for (int i = 0; i < playerUnits.Count; i++)
+            {
+                if (!selectedUnits.Contains(playerUnits[i]))
+                {
+                    allSelected = false;
+                    break;
+                }
+            }
+
+            for (int i = 0; i < playerUnits.Count; i++)
+            {
+                UnitData unit = playerUnits[i];
+                if (allSelected)
+                {
+                    selectedUnits.Remove(unit);
+                }
+                else if (!selectedUnits.Contains(unit))
+                {
+                    selectedUnits.Add(unit);
+                }
+            }
+            NotifySelectionChanged();
+        }
+
+        public void ClearAllOrdersForSelectedUnits()
+        {
+            if (selectedUnits.Count == 0)
+            {
+                return;
+            }
+
+            for (int i = 0; i < selectedUnits.Count; i++)
+            {
+                UnitData unit = selectedUnits[i];
+                if (unit != null && unit.pendingOrders != null)
+                {
+                    unit.pendingOrders.Clear();
+                }
+            }
+            OnCommandStateChanged?.Invoke();
+        }
+
+        private void NotifySelectionChanged()
+        {
             selectedUnit = selectedUnits.Count > 0
                 ? selectedUnits[0]
                 : null;
@@ -787,26 +859,43 @@ namespace EdoStrategy.Core
 
             List<UnitData> clickedUnits =
                 unitManager.GetUnitsAt(cellPosition.x, cellPosition.y);
+            bool isShiftHeld =
+                Input.GetKey(KeyCode.LeftShift) ||
+                Input.GetKey(KeyCode.RightShift);
+            var playerUnits = new List<UnitData>();
+            for (int i = 0; i < clickedUnits.Count; i++)
+            {
+                if (clickedUnits[i].faction == Faction.Player)
+                {
+                    playerUnits.Add(clickedUnits[i]);
+                }
+            }
+            if (isShiftHeld && playerUnits.Count == 0)
+            {
+                return;
+            }
+
             OnCellUnitsSelected?.Invoke(
                 cellPosition.x,
                 cellPosition.y,
                 clickedUnits);
-            if (clickedUnits.Count > 0)
+
+            if (playerUnits.Count > 0)
             {
-                UnitData onlyPlayerUnit = null;
-                int playerUnitCount = 0;
-                for (int i = 0; i < clickedUnits.Count; i++)
+                if (isShiftHeld)
                 {
-                    if (clickedUnits[i].faction == Faction.Player)
-                    {
-                        onlyPlayerUnit = clickedUnits[i];
-                        playerUnitCount++;
-                    }
+                    ToggleCellUnitSelection(playerUnits);
+                    return;
                 }
-                if (playerUnitCount == 1)
+                if (playerUnits.Count == 1)
                 {
-                    SelectUnit(onlyPlayerUnit);
+                    SelectUnit(playerUnits[0]);
                 }
+                return;
+            }
+
+            if (isShiftHeld)
+            {
                 return;
             }
 

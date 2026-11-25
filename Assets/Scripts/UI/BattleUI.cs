@@ -910,7 +910,7 @@ namespace EdoStrategy.UI
             }
         }
 
-        private static bool IsInputFieldFocused()
+        public static bool IsInputFieldFocused()
         {
             if (EventSystem.current == null ||
                 EventSystem.current.currentSelectedGameObject == null)
