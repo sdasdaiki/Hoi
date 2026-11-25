@@ -200,21 +200,12 @@ namespace EdoStrategy.Map
                 int currentY = current.Index / Width;
                 foreach (Vector2Int neighbor in GetNeighbors(currentX, currentY))
                 {
-                    bool blockedByEnemy = false;
-                    if (unitManager != null)
-                    {
-                        List<UnitData> occupants =
-                            unitManager.GetUnitsAt(neighbor.x, neighbor.y);
-                        for (int i = 0; i < occupants.Count; i++)
-                        {
-                            if (occupants[i].faction != movingFaction)
-                            {
-                                blockedByEnemy = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (blockedByEnemy)
+                    if (IsBlockedByOtherFaction(
+                            neighbor.x,
+                            neighbor.y,
+                            movingFaction,
+                            unitManager,
+                            false))
                     {
                         continue;
                     }
@@ -248,21 +239,12 @@ namespace EdoStrategy.Map
                 {
                     int x = i % Width;
                     int y = i / Width;
-                    bool blockedByEnemy = false;
-                    if (unitManager != null)
-                    {
-                        List<UnitData> occupants =
-                            unitManager.GetUnitsAt(x, y);
-                        for (int j = 0; j < occupants.Count; j++)
-                        {
-                            if (occupants[j].faction != movingFaction)
-                            {
-                                blockedByEnemy = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!blockedByEnemy)
+                    if (!IsBlockedByOtherFaction(
+                            x,
+                            y,
+                            movingFaction,
+                            unitManager,
+                            false))
                     {
                         reachable.Add(new Vector2Int(x, y));
                     }
@@ -355,22 +337,12 @@ namespace EdoStrategy.Map
                 int currentY = current.Index / Width;
                 foreach (Vector2Int neighbor in GetNeighbors(currentX, currentY))
                 {
-                    bool blockedByEnemy = false;
-                    if (unitManager != null)
-                    {
-                        List<UnitData> occupants =
-                            unitManager.GetUnitsAt(neighbor.x, neighbor.y);
-                        for (int i = 0; i < occupants.Count; i++)
-                        {
-                            if (occupants[i].faction != movingFaction ||
-                                movingFaction == Faction.None)
-                            {
-                                blockedByEnemy = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (blockedByEnemy)
+                    if (IsBlockedByOtherFaction(
+                            neighbor.x,
+                            neighbor.y,
+                            movingFaction,
+                            unitManager,
+                            true))
                     {
                         continue;
                     }
@@ -419,6 +391,33 @@ namespace EdoStrategy.Map
 
             reversePath.Reverse();
             return reversePath;
+        }
+
+        private static bool IsBlockedByOtherFaction(
+            int x,
+            int y,
+            Faction movingFaction,
+            UnitManager unitManager,
+            bool blockAllWhenFactionIsNone)
+        {
+            if (unitManager == null)
+            {
+                return false;
+            }
+
+            List<UnitData> occupants = unitManager.GetUnitsAt(x, y);
+            for (int i = 0; i < occupants.Count; i++)
+            {
+                UnitData occupant = occupants[i];
+                if (occupant != null &&
+                    (occupant.faction != movingFaction ||
+                     blockAllWhenFactionIsNone &&
+                     movingFaction == Faction.None))
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private readonly struct PathNode

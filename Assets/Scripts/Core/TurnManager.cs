@@ -615,13 +615,21 @@ namespace EdoStrategy.Core
                 foreach (KeyValuePair<Vector2Int, List<MoveProposal>> entry
                     in proposalsByCell)
                 {
-                    MoveProposal winner = SelectMoveWinner(entry.Value);
-                    winningProposals.Add(winner);
+                    if (!HasDifferentFactions(entry.Value))
+                    {
+                        winningProposals.AddRange(entry.Value);
+                        continue;
+                    }
+
+                    MoveProposal winner =
+                        SelectMoveWinnerByFaction(entry.Value);
+                    Faction winningFaction = winner.move.unit.faction;
                     for (int i = 0; i < entry.Value.Count; i++)
                     {
                         MoveProposal proposal = entry.Value[i];
-                        if (proposal == winner)
+                        if (proposal.move.unit.faction == winningFaction)
                         {
+                            winningProposals.Add(proposal);
                             continue;
                         }
 
@@ -687,6 +695,60 @@ namespace EdoStrategy.Core
                 OnCommandStateChanged?.Invoke();
             }
             return movedUnits;
+        }
+
+        private static bool HasDifferentFactions(
+            List<MoveProposal> proposals)
+        {
+            if (proposals.Count < 2)
+            {
+                return false;
+            }
+
+            Faction firstFaction = proposals[0].move.unit.faction;
+            for (int i = 1; i < proposals.Count; i++)
+            {
+                if (proposals[i].move.unit.faction != firstFaction)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private MoveProposal SelectMoveWinnerByFaction(
+            List<MoveProposal> proposals)
+        {
+            var factionWinners = new List<MoveProposal>();
+            for (int i = 0; i < proposals.Count; i++)
+            {
+                Faction faction = proposals[i].move.unit.faction;
+                bool alreadyAdded = false;
+                for (int j = 0; j < factionWinners.Count; j++)
+                {
+                    if (factionWinners[j].move.unit.faction == faction)
+                    {
+                        alreadyAdded = true;
+                        break;
+                    }
+                }
+                if (alreadyAdded)
+                {
+                    continue;
+                }
+
+                var sameFactionProposals = new List<MoveProposal>();
+                for (int j = 0; j < proposals.Count; j++)
+                {
+                    if (proposals[j].move.unit.faction == faction)
+                    {
+                        sameFactionProposals.Add(proposals[j]);
+                    }
+                }
+                factionWinners.Add(SelectMoveWinner(sameFactionProposals));
+            }
+
+            return SelectMoveWinner(factionWinners);
         }
 
         private HashSet<UnitData> GetUnitsPinnedByReadyAttacks(
@@ -1600,8 +1662,16 @@ namespace EdoStrategy.Core
             }
 
             int movePoints = definition != null ? definition.movePoints : 0;
-            if (movePoints <= 0 || totalMoveCost > movePoints)
+            if (movePoints <= 0 ||
+                totalMoveCost > movePoints ||
+                totalMoveCost > unit.remainingMovePoints)
             {
+                Debug.Log(
+                    string.Format(
+                        "移動予約不可: {0}（必要コスト={1}, 残り移動力={2}）",
+                        unit.unitName,
+                        totalMoveCost,
+                        unit.remainingMovePoints));
                 Debug.LogWarning(
                     string.Format(
                         "移動予約失敗: 移動コスト超過 ({0},{1}) -> ({2},{3}), 必要コスト={4}, 移動力={5}",
