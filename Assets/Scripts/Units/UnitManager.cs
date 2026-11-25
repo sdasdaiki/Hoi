@@ -48,12 +48,16 @@ namespace EdoStrategy.Units
                     "ユニット追加拒否: 重複したunitId=" + unit.unitId);
                 return;
             }
-            if (GetUnitAt(unit.x, unit.y) != null)
+            List<UnitData> occupants = GetUnitsAt(unit.x, unit.y);
+            for (int i = 0; i < occupants.Count; i++)
             {
-                Debug.LogWarning(
-                    "ユニット追加拒否: 同じ座標が占有されています (" +
-                    unit.x + "," + unit.y + ")");
-                return;
+                if (occupants[i].faction != unit.faction)
+                {
+                    Debug.LogWarning(
+                        "ユニット追加拒否: 敵部隊が同じ座標を占有しています (" +
+                        unit.x + "," + unit.y + ")");
+                    return;
+                }
             }
 
             units.Add(unit);
@@ -117,6 +121,20 @@ namespace EdoStrategy.Units
             return null;
         }
 
+        public List<UnitData> GetUnitsAt(int x, int y)
+        {
+            var unitsAtCell = new List<UnitData>();
+            for (int i = 0; i < units.Count; i++)
+            {
+                UnitData unit = units[i];
+                if (unit != null && unit.x == x && unit.y == y)
+                {
+                    unitsAtCell.Add(unit);
+                }
+            }
+            return unitsAtCell;
+        }
+
         public bool TryMoveUnit(UnitData unit, int targetX, int targetY)
         {
             if (unit == null)
@@ -129,10 +147,13 @@ namespace EdoStrategy.Units
                 return false;
             }
 
-            UnitData occupant = GetUnitAt(targetX, targetY);
-            if (occupant != null)
+            List<UnitData> occupants = GetUnitsAt(targetX, targetY);
+            for (int i = 0; i < occupants.Count; i++)
             {
-                return false;
+                if (occupants[i].faction != unit.faction)
+                {
+                    return false;
+                }
             }
 
             unit.x = targetX;

@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using EdoStrategy.Command;
 using EdoStrategy.Core;
 using EdoStrategy.Map;
 using EdoStrategy.Units;
@@ -9,6 +11,8 @@ namespace EdoStrategy.UI
 {
     public class BattleUI : MonoBehaviour
     {
+        private static Sprite uiRectangleSprite;
+
         [SerializeField] private TurnManager turnManager;
         [SerializeField] private UnitBoardView unitBoardView;
         [SerializeField] private TMP_FontAsset japaneseFont;
@@ -18,6 +22,13 @@ namespace EdoStrategy.UI
         private Button endTurnButton;
         private Button plannedArrowToggleButton;
         private TextMeshProUGUI plannedArrowToggleLabel;
+        private GameObject unitListPanel;
+        private RectTransform unitListContent;
+        private TurnManager subscribedTurnManager;
+        private readonly List<UnitData> displayedUnits =
+            new List<UnitData>();
+        private readonly List<UnitListRow> unitListRows =
+            new List<UnitListRow>();
 
         private void Awake()
         {
@@ -45,6 +56,7 @@ namespace EdoStrategy.UI
                 turnManager = FindObjectOfType<TurnManager>();
             }
 
+            BindTurnManager();
             EnsureEventSystem();
             CreateBattleUi();
             ApplyJapaneseFontToTextComponents();
@@ -66,8 +78,18 @@ namespace EdoStrategy.UI
                 unitBoardView = FindObjectOfType<UnitBoardView>();
             }
 
+            BindTurnManager();
             ApplyJapaneseFontToTextComponents();
             RefreshUi();
+        }
+
+        private void OnDestroy()
+        {
+            if (subscribedTurnManager != null)
+            {
+                subscribedTurnManager.OnCellUnitsSelected -=
+                    ShowUnitsAtCell;
+            }
         }
 
         private void RefreshUi()
@@ -171,6 +193,11 @@ namespace EdoStrategy.UI
                     ? "移動矢印: 全表示"
                     : "移動矢印: 個別";
             }
+
+            if (unitListPanel != null && unitListPanel.activeSelf)
+            {
+                RefreshUnitListRows();
+            }
         }
 
         private void CreateBattleUi()
@@ -243,7 +270,465 @@ namespace EdoStrategy.UI
             plannedArrowToggleLabel =
                 plannedArrowToggleButton
                     .GetComponentInChildren<TextMeshProUGUI>();
+            CreateUnitListPanel(canvas.transform, font);
             ApplyJapaneseFontToTextComponents();
+        }
+
+        private void CreateUnitListPanel(
+            Transform parent,
+            TMP_FontAsset font)
+        {
+            RectTransform panelRect = CreateUiRect(
+                "Cell Unit List",
+                parent,
+                new Vector2(0f, 0.5f),
+                new Vector2(0f, 0.5f),
+                new Vector2(16f, -70f),
+                new Vector2(430f, 500f));
+            panelRect.pivot = new Vector2(0f, 0.5f);
+            unitListPanel = panelRect.gameObject;
+            Image panelImage = unitListPanel.AddComponent<Image>();
+            panelImage.sprite = GetUiRectangleSprite();
+            panelImage.color = new Color(0.06f, 0.07f, 0.09f, 0.94f);
+
+            RectTransform titleRect = CreateUiRect(
+                "Cell Unit List Title",
+                panelRect,
+                new Vector2(0f, 1f),
+                new Vector2(1f, 1f),
+                new Vector2(10f, -8f),
+                new Vector2(-20f, 36f));
+            titleRect.pivot = new Vector2(0f, 1f);
+            TextMeshProUGUI title =
+                titleRect.gameObject.AddComponent<TextMeshProUGUI>();
+            title.font = font;
+            title.fontSize = 23f;
+            title.color = Color.white;
+            title.alignment = TextAlignmentOptions.MidlineLeft;
+            title.text = "選択マス部隊一覧";
+            title.raycastTarget = false;
+
+            RectTransform allButtonRect = CreateUiRect(
+                "Select All Cell Units",
+                panelRect,
+                new Vector2(0f, 1f),
+                new Vector2(0f, 1f),
+                new Vector2(10f, -48f),
+                new Vector2(190f, 40f));
+            allButtonRect.pivot = new Vector2(0f, 1f);
+            var allButton = allButtonRect.gameObject.AddComponent<Button>();
+            Image allButtonImage =
+                allButtonRect.gameObject.AddComponent<Image>();
+            allButtonImage.sprite = GetUiRectangleSprite();
+            allButtonImage.color = new Color(0.14f, 0.25f, 0.4f, 1f);
+            allButton.targetGraphic = allButtonImage;
+            allButton.onClick.AddListener(OnSelectAllCellUnits);
+
+            RectTransform allButtonLabelRect = CreateUiRect(
+                "Label",
+                allButtonRect,
+                Vector2.zero,
+                Vector2.one,
+                Vector2.zero,
+                Vector2.zero);
+            allButtonLabelRect.offsetMin = Vector2.zero;
+            allButtonLabelRect.offsetMax = Vector2.zero;
+            TextMeshProUGUI allButtonLabel =
+                allButtonLabelRect.gameObject
+                    .AddComponent<TextMeshProUGUI>();
+            allButtonLabel.font = font;
+            allButtonLabel.fontSize = 18f;
+            allButtonLabel.color = Color.white;
+            allButtonLabel.alignment = TextAlignmentOptions.Center;
+            allButtonLabel.text = "同マス全選択";
+            allButtonLabel.raycastTarget = false;
+
+            RectTransform viewportRect = CreateUiRect(
+                "Cell Unit List Viewport",
+                panelRect,
+                new Vector2(0f, 1f),
+                new Vector2(1f, 1f),
+                new Vector2(8f, -96f),
+                new Vector2(-16f, 394f));
+            viewportRect.pivot = new Vector2(0f, 1f);
+            Image viewportImage =
+                viewportRect.gameObject.AddComponent<Image>();
+            viewportImage.sprite = GetUiRectangleSprite();
+            viewportImage.color = new Color(0f, 0f, 0f, 0.12f);
+            Mask viewportMask = viewportRect.gameObject.AddComponent<Mask>();
+            viewportMask.showMaskGraphic = false;
+
+            GameObject contentObject = new GameObject(
+                "Cell Unit List Content",
+                typeof(RectTransform),
+                typeof(VerticalLayoutGroup),
+                typeof(ContentSizeFitter));
+            contentObject.transform.SetParent(viewportRect, false);
+            unitListContent = contentObject.GetComponent<RectTransform>();
+            unitListContent.anchorMin = new Vector2(0f, 1f);
+            unitListContent.anchorMax = new Vector2(1f, 1f);
+            unitListContent.pivot = new Vector2(0.5f, 1f);
+            unitListContent.anchoredPosition = Vector2.zero;
+            unitListContent.sizeDelta = new Vector2(0f, 0f);
+
+            VerticalLayoutGroup layout =
+                contentObject.GetComponent<VerticalLayoutGroup>();
+            layout.padding = new RectOffset(4, 4, 4, 4);
+            layout.spacing = 4f;
+            layout.childControlWidth = true;
+            layout.childControlHeight = true;
+            layout.childForceExpandWidth = true;
+            layout.childForceExpandHeight = false;
+
+            ContentSizeFitter fitter =
+                contentObject.GetComponent<ContentSizeFitter>();
+            fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            ScrollRect scroll = viewportRect.gameObject.AddComponent<ScrollRect>();
+            scroll.viewport = viewportRect;
+            scroll.content = unitListContent;
+            scroll.horizontal = false;
+            scroll.vertical = true;
+            scroll.movementType = ScrollRect.MovementType.Clamped;
+            unitListPanel.SetActive(false);
+        }
+
+        private void ShowUnitsAtCell(
+            int x,
+            int y,
+            List<UnitData> units)
+        {
+            if (unitListPanel == null)
+            {
+                return;
+            }
+
+            displayedUnits.Clear();
+            if (units != null)
+            {
+                displayedUnits.AddRange(units);
+            }
+
+            unitListPanel.SetActive(displayedUnits.Count > 0);
+            if (displayedUnits.Count == 0)
+            {
+                ClearUnitListRows();
+                return;
+            }
+
+            TextMeshProUGUI title =
+                unitListPanel.GetComponentInChildren<TextMeshProUGUI>();
+            if (title != null)
+            {
+                title.text = string.Format(
+                    "選択マス部隊一覧 ({0}, {1})",
+                    x,
+                    y);
+            }
+            RebuildUnitListRows();
+        }
+
+        private void RebuildUnitListRows()
+        {
+            ClearUnitListRows();
+            if (unitListContent == null)
+            {
+                return;
+            }
+
+            TMP_FontAsset font = LoadMeiryoFont();
+            for (int i = 0; i < displayedUnits.Count; i++)
+            {
+                UnitData unit = displayedUnits[i];
+                if (unit == null)
+                {
+                    continue;
+                }
+
+                RectTransform rowRect = CreateUiRect(
+                    "Unit List Row",
+                    unitListContent,
+                    Vector2.zero,
+                    Vector2.one,
+                    Vector2.zero,
+                    new Vector2(0f, 72f));
+                LayoutElement layoutElement =
+                    rowRect.gameObject.AddComponent<LayoutElement>();
+                layoutElement.preferredHeight = 72f;
+                layoutElement.minHeight = 72f;
+
+                Image rowImage = rowRect.gameObject.AddComponent<Image>();
+                rowImage.sprite = GetUiRectangleSprite();
+                rowImage.color = new Color(0.16f, 0.17f, 0.2f, 1f);
+                Button rowButton = rowRect.gameObject.AddComponent<Button>();
+                rowButton.targetGraphic = rowImage;
+                UnitData clickedUnit = unit;
+                rowButton.onClick.AddListener(
+                    () => OnSelectCellUnit(clickedUnit));
+
+                CreateUiGauge(
+                    rowRect,
+                    "Organization Track",
+                    10f,
+                    new Color(0.04f, 0.04f, 0.04f, 1f));
+                Image organizationFill = CreateUiGauge(
+                    rowRect,
+                    "Organization Fill",
+                    10f,
+                    new Color(0.18f, 0.86f, 0.28f, 1f));
+                organizationFill.type = Image.Type.Filled;
+                organizationFill.fillMethod = Image.FillMethod.Vertical;
+                organizationFill.fillOrigin = (int)Image.OriginVertical.Bottom;
+                organizationFill.fillAmount = 1f;
+                organizationFill.transform.SetAsLastSibling();
+
+                CreateUiGauge(
+                    rowRect,
+                    "Manpower Track",
+                    26f,
+                    new Color(0.04f, 0.04f, 0.04f, 1f));
+                Image manpowerFill = CreateUiGauge(
+                    rowRect,
+                    "Manpower Fill",
+                    26f,
+                    new Color(0.96f, 0.48f, 0.12f, 1f));
+                manpowerFill.type = Image.Type.Filled;
+                manpowerFill.fillMethod = Image.FillMethod.Vertical;
+                manpowerFill.fillOrigin = (int)Image.OriginVertical.Bottom;
+                manpowerFill.fillAmount = 1f;
+                manpowerFill.transform.SetAsLastSibling();
+
+                RectTransform labelRect = CreateUiRect(
+                    "Unit Details",
+                    rowRect,
+                    new Vector2(0f, 0f),
+                    new Vector2(1f, 1f),
+                    new Vector2(48f, 0f),
+                    new Vector2(-54f, -6f));
+                TextMeshProUGUI details =
+                    labelRect.gameObject.AddComponent<TextMeshProUGUI>();
+                details.font = font;
+                details.fontSize = 15f;
+                details.color = Color.white;
+                details.alignment = TextAlignmentOptions.MidlineLeft;
+                details.enableWordWrapping = false;
+                details.raycastTarget = false;
+
+                unitListRows.Add(new UnitListRow(
+                    clickedUnit,
+                    rowImage,
+                    details,
+                    organizationFill,
+                    manpowerFill));
+            }
+            RefreshUnitListRows();
+        }
+
+        private Image CreateUiGauge(
+            RectTransform parent,
+            string name,
+            float x,
+            Color color)
+        {
+            RectTransform rect = CreateUiRect(
+                name,
+                parent,
+                new Vector2(0f, 0f),
+                new Vector2(0f, 0f),
+                new Vector2(x, 0f),
+                new Vector2(10f, 1f));
+            rect.anchorMin = new Vector2(0f, 0f);
+            rect.anchorMax = new Vector2(0f, 1f);
+            rect.pivot = new Vector2(0f, 0.5f);
+            rect.anchoredPosition = new Vector2(x, 0f);
+            rect.sizeDelta = new Vector2(10f, -20f);
+            Image image = rect.gameObject.AddComponent<Image>();
+            image.sprite = GetUiRectangleSprite();
+            image.color = color;
+            image.raycastTarget = false;
+            return image;
+        }
+
+        private void RefreshUnitListRows()
+        {
+            GameManager gameManager = FindObjectOfType<GameManager>();
+            for (int i = 0; i < unitListRows.Count; i++)
+            {
+                UnitListRow row = unitListRows[i];
+                UnitData unit = row.Unit;
+                if (unit == null)
+                {
+                    continue;
+                }
+
+                UnitDefinition definition = gameManager != null
+                    ? gameManager.GetUnitDefinition(
+                        GetSelectedUnitTypeId(unit))
+                    : null;
+                string typeName = definition != null &&
+                                  !string.IsNullOrEmpty(definition.displayName)
+                    ? definition.displayName
+                    : GetSelectedUnitTypeId(unit) ?? "不明";
+                string unitName = string.IsNullOrEmpty(unit.unitName)
+                    ? unit.unitId
+                    : unit.unitName;
+                int currentManpower = unit.CurrentTotalManpower;
+                int maxManpower = GetUnitMaxManpower(unit);
+                int organizationPercent = unit.maxOrganization > 0
+                    ? Mathf.RoundToInt(
+                        Mathf.Clamp01(
+                            unit.organization / (float)unit.maxOrganization) *
+                        100f)
+                    : 0;
+                string orderStatus = GetOrderStatus(unit);
+
+                row.Details.text = string.Format(
+                    "{0} / {1}\n兵員 {2}/{3}  組織 {4}%  {5}",
+                    typeName,
+                    unitName,
+                    currentManpower,
+                    maxManpower,
+                    organizationPercent,
+                    orderStatus);
+                row.OrganizationFill.fillAmount =
+                    unit.maxOrganization > 0
+                        ? Mathf.Clamp01(
+                            unit.organization / (float)unit.maxOrganization)
+                        : 0f;
+                row.ManpowerFill.fillAmount = maxManpower > 0
+                    ? Mathf.Clamp01(currentManpower / (float)maxManpower)
+                    : 0f;
+                row.Background.color =
+                    turnManager != null &&
+                    turnManager.IsUnitSelected(unit)
+                        ? new Color(0.35f, 0.34f, 0.12f, 1f)
+                        : new Color(0.16f, 0.17f, 0.2f, 1f);
+            }
+        }
+
+        private void ClearUnitListRows()
+        {
+            unitListRows.Clear();
+            if (unitListContent == null)
+            {
+                return;
+            }
+
+            for (int i = unitListContent.childCount - 1; i >= 0; i--)
+            {
+                Destroy(unitListContent.GetChild(i).gameObject);
+            }
+        }
+
+        private void OnSelectCellUnit(UnitData unit)
+        {
+            if (turnManager != null)
+            {
+                turnManager.SelectUnit(unit);
+            }
+        }
+
+        private void OnSelectAllCellUnits()
+        {
+            if (turnManager == null)
+            {
+                return;
+            }
+
+            var playerUnits = new List<UnitData>();
+            for (int i = 0; i < displayedUnits.Count; i++)
+            {
+                if (displayedUnits[i] != null &&
+                    displayedUnits[i].faction == Faction.Player)
+                {
+                    playerUnits.Add(displayedUnits[i]);
+                }
+            }
+            turnManager.SelectUnits(playerUnits);
+        }
+
+        private void BindTurnManager()
+        {
+            if (subscribedTurnManager == turnManager)
+            {
+                return;
+            }
+            if (subscribedTurnManager != null)
+            {
+                subscribedTurnManager.OnCellUnitsSelected -=
+                    ShowUnitsAtCell;
+            }
+            subscribedTurnManager = turnManager;
+            if (subscribedTurnManager != null)
+            {
+                subscribedTurnManager.OnCellUnitsSelected +=
+                    ShowUnitsAtCell;
+            }
+        }
+
+        private static string GetOrderStatus(UnitData unit)
+        {
+            if (unit.pendingOrders == null ||
+                unit.pendingOrders.Count == 0 ||
+                unit.pendingOrders[0] == null)
+            {
+                return "命令なし";
+            }
+
+            Order order = unit.pendingOrders[0];
+            if (order.orderType == OrderType.Move)
+            {
+                return string.Format(
+                    "移動待機 ({0},{1})",
+                    order.targetX,
+                    order.targetY);
+            }
+            return string.Format(
+                "攻撃待機 ({0},{1})",
+                order.targetX,
+                order.targetY);
+        }
+
+        private static int GetUnitMaxManpower(UnitData unit)
+        {
+            int total = 0;
+            if (unit.battalions != null)
+            {
+                for (int i = 0; i < unit.battalions.Count; i++)
+                {
+                    if (unit.battalions[i] != null)
+                    {
+                        total += Mathf.Max(
+                            0,
+                            unit.battalions[i].maxManpower);
+                    }
+                }
+            }
+            return total;
+        }
+
+        private sealed class UnitListRow
+        {
+            public readonly UnitData Unit;
+            public readonly Image Background;
+            public readonly TextMeshProUGUI Details;
+            public readonly Image OrganizationFill;
+            public readonly Image ManpowerFill;
+
+            public UnitListRow(
+                UnitData unit,
+                Image background,
+                TextMeshProUGUI details,
+                Image organizationFill,
+                Image manpowerFill)
+            {
+                Unit = unit;
+                Background = background;
+                Details = details;
+                OrganizationFill = organizationFill;
+                ManpowerFill = manpowerFill;
+            }
         }
 
         private TMP_FontAsset LoadMeiryoFont()
@@ -319,6 +804,7 @@ namespace EdoStrategy.UI
 
             var button = rect.gameObject.AddComponent<Button>();
             Image image = rect.gameObject.AddComponent<Image>();
+            image.sprite = GetUiRectangleSprite();
             image.color = new Color(0.12f, 0.12f, 0.12f, 0.9f);
             button.targetGraphic = image;
             button.onClick.AddListener(onClick);
@@ -381,6 +867,26 @@ namespace EdoStrategy.UI
                     typeof(UnityEngine.EventSystems.EventSystem),
                     typeof(UnityEngine.EventSystems.StandaloneInputModule));
             }
+        }
+
+        private static Sprite GetUiRectangleSprite()
+        {
+            if (uiRectangleSprite != null)
+            {
+                return uiRectangleSprite;
+            }
+
+            var texture = new Texture2D(1, 1, TextureFormat.RGBA32, false);
+            texture.SetPixel(0, 0, Color.white);
+            texture.Apply();
+            texture.hideFlags = HideFlags.DontSave;
+            uiRectangleSprite = Sprite.Create(
+                texture,
+                new Rect(0f, 0f, 1f, 1f),
+                new Vector2(0.5f, 0.5f),
+                1f);
+            uiRectangleSprite.hideFlags = HideFlags.DontSave;
+            return uiRectangleSprite;
         }
 
 #if UNITY_EDITOR

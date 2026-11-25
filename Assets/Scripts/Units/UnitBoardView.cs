@@ -17,6 +17,8 @@ namespace EdoStrategy.Units
         private UnitManager unitManager;
         private readonly Dictionary<UnitData, UnitView> views =
             new Dictionary<UnitData, UnitView>();
+        private readonly List<HexStackCounterView> counters =
+            new List<HexStackCounterView>();
         private TurnManager turnManager;
         private readonly List<SpriteRenderer> reachableHighlights =
             new List<SpriteRenderer>();
@@ -63,18 +65,24 @@ namespace EdoStrategy.Units
             {
                 turnManager.OnCommandStateChanged += OnCommandStateChanged;
             }
-            OnCommandStateChanged();
-
             foreach (UnitData unit in unitManager.Units)
             {
                 OnUnitAdded(unit);
             }
+            OnCommandStateChanged();
         }
 
         public UnitView GetView(UnitData unit)
         {
             UnitView view;
             return unit != null && views.TryGetValue(unit, out view) ? view : null;
+        }
+
+        public void RefreshAllViews()
+        {
+            RefreshCounters();
+            RefreshPlannedArrows();
+            RefreshSelectionAndReachable();
         }
 
         public void ToggleAllPlannedArrows()
@@ -93,8 +101,152 @@ namespace EdoStrategy.Units
 
         private void OnCommandStateChanged()
         {
-            RefreshPlannedArrows();
-            RefreshSelectionAndReachable();
+            RefreshAllViews();
+        }
+
+        private void RefreshCounters()
+        {
+            for (int i = 0; i < counters.Count; i++)
+            {
+                if (counters[i] != null)
+                {
+                    Destroy(counters[i].gameObject);
+                }
+            }
+            counters.Clear();
+
+            if (unitManager == null)
+            {
+                return;
+            }
+
+            var groups = new List<CounterGroup>();
+            foreach (UnitData unit in unitManager.Units)
+            {
+                if (unit == null || !unit.IsAlive)
+                {
+                    continue;
+                }
+
+                string unitTypeId = GetUnitTypeId(unit);
+                CounterGroup group = null;
+                for (int i = 0; i < groups.Count; i++)
+                {
+                    CounterGroup candidate = groups[i];
+                    if (candidate.X == unit.x &&
+                        candidate.Y == unit.y &&
+                        candidate.Faction == unit.faction &&
+                        candidate.UnitTypeId == unitTypeId)
+                    {
+                        group = candidate;
+                        break;
+                    }
+                }
+
+                if (group == null)
+                {
+                    group = new CounterGroup(
+                        unit.x,
+                        unit.y,
+                        unit.faction,
+                        unitTypeId);
+                    groups.Add(group);
+                }
+                group.Units.Add(unit);
+            }
+
+            groups.Sort((left, right) =>
+            {
+                int xOrder = left.X.CompareTo(right.X);
+                if (xOrder != 0)
+                {
+                    return xOrder;
+                }
+                int yOrder = left.Y.CompareTo(right.Y);
+                if (yOrder != 0)
+                {
+                    return yOrder;
+                }
+
+                int factionOrder = left.Faction.CompareTo(right.Faction);
+                return factionOrder != 0
+                    ? factionOrder
+                    : string.Compare(
+                        left.UnitTypeId,
+                        right.UnitTypeId,
+                        System.StringComparison.Ordinal);
+            });
+
+            float cellWidth = tilemap != null
+                ? Mathf.Abs(tilemap.cellSize.x)
+                : 1f;
+            float cellHeight = tilemap != null
+                ? Mathf.Abs(tilemap.cellSize.y)
+                : 1f;
+            int currentIndex = 0;
+            while (currentIndex < groups.Count)
+            {
+                int firstIndex = currentIndex;
+                int x = groups[firstIndex].X;
+                int y = groups[firstIndex].Y;
+                while (currentIndex < groups.Count &&
+                       groups[currentIndex].X == x &&
+                       groups[currentIndex].Y == y)
+                {
+                    currentIndex++;
+                }
+
+                int groupCount = currentIndex - firstIndex;
+                float counterHeight = Mathf.Min(
+                    cellHeight * 0.25f,
+                    cellHeight * 0.84f / groupCount);
+                float verticalSpacing = counterHeight * 1.08f;
+                Vector3 center = tilemap != null
+                    ? tilemap.GetCellCenterWorld(new Vector3Int(x, y, 0))
+                    : new Vector3(x, y, 0f);
+
+                for (int i = firstIndex; i < currentIndex; i++)
+                {
+                    CounterGroup group = groups[i];
+                    bool selected = false;
+                    if (turnManager != null)
+                    {
+                        for (int j = 0; j < group.Units.Count; j++)
+                        {
+                            if (turnManager.IsUnitSelected(group.Units[j]))
+                            {
+                                selected = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    UnitDefinition definition = gameManager != null
+                        ? gameManager.GetUnitDefinition(group.UnitTypeId)
+                        : null;
+                    GameObject counterObject =
+                        new GameObject("Hex Stack Counter");
+                    counterObject.transform.SetParent(unitContainer, false);
+                    counterObject.transform.position = center + new Vector3(
+                        0f,
+                        ((groupCount - 1) * 0.5f -
+                         (i - firstIndex)) * verticalSpacing,
+                        -0.2f);
+
+                    HexStackCounterView counter =
+                        counterObject.AddComponent<HexStackCounterView>();
+                    counter.Initialize(
+                        group.Units,
+                        definition,
+                        group.UnitTypeId,
+                        counterObject.transform.position,
+                        new Vector2(
+                            cellWidth * 0.76f,
+                            counterHeight),
+                        selected);
+                    counters.Add(counter);
+                }
+            }
         }
 
         private void RefreshSelectionAndReachable()
@@ -360,7 +512,9 @@ namespace EdoStrategy.Units
                 ? gameManager.GetUnitDefinition(GetUnitTypeId(unit))
                 : null;
             view.Initialize(unit, definition, tilemap);
+            view.SetCounterManaged(true);
             views.Add(unit, view);
+            RefreshAllViews();
         }
 
         private void OnUnitMoved(UnitData unit)
@@ -370,22 +524,26 @@ namespace EdoStrategy.Units
             {
                 view.Refresh();
             }
-            OnCommandStateChanged();
+            RefreshAllViews();
         }
 
         private void OnUnitRemoved(UnitData unit)
         {
             UnitView view;
-            if (unit == null || !views.TryGetValue(unit, out view))
+            if (unit == null)
             {
                 return;
             }
 
-            views.Remove(unit);
-            if (view != null)
+            if (views.TryGetValue(unit, out view))
             {
-                Destroy(view.gameObject);
+                views.Remove(unit);
+                if (view != null)
+                {
+                    Destroy(view.gameObject);
+                }
             }
+            RefreshAllViews();
         }
 
         private string GetUnitTypeId(UnitData unit)
@@ -396,6 +554,27 @@ namespace EdoStrategy.Units
                 return null;
             }
             return unit.battalions[0].unitTypeId;
+        }
+
+        private sealed class CounterGroup
+        {
+            public readonly int X;
+            public readonly int Y;
+            public readonly Faction Faction;
+            public readonly string UnitTypeId;
+            public readonly List<UnitData> Units = new List<UnitData>();
+
+            public CounterGroup(
+                int x,
+                int y,
+                Faction faction,
+                string unitTypeId)
+            {
+                X = x;
+                Y = y;
+                Faction = faction;
+                UnitTypeId = unitTypeId;
+            }
         }
     }
 }

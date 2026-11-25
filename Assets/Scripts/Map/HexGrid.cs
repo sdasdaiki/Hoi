@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using EdoStrategy.Core;
-using EdoStrategy.Command;
 using EdoStrategy.Units;
 using UnityEngine;
 
@@ -151,21 +150,6 @@ namespace EdoStrategy.Map
             return neighbors;
         }
 
-        public static bool HasImmediateMoveOrder(UnitData unit)
-        {
-            if (unit == null || unit.pendingOrders == null ||
-                unit.pendingOrders.Count == 0)
-            {
-                return false;
-            }
-
-            Order order = unit.pendingOrders[0];
-            return order != null &&
-                   order.orderType == OrderType.Move &&
-                   order.remainingDelayTurns == 0 &&
-                   (order.targetX != unit.x || order.targetY != unit.y);
-        }
-
         public List<Vector2Int> GetReachableCells(
             int startX,
             int startY,
@@ -216,12 +200,21 @@ namespace EdoStrategy.Map
                 int currentY = current.Index / Width;
                 foreach (Vector2Int neighbor in GetNeighbors(currentX, currentY))
                 {
-                    UnitData occupant =
-                        unitManager != null
-                            ? unitManager.GetUnitAt(neighbor.x, neighbor.y)
-                            : null;
-                    if (occupant != null &&
-                        occupant.faction != movingFaction)
+                    bool blockedByEnemy = false;
+                    if (unitManager != null)
+                    {
+                        List<UnitData> occupants =
+                            unitManager.GetUnitsAt(neighbor.x, neighbor.y);
+                        for (int i = 0; i < occupants.Count; i++)
+                        {
+                            if (occupants[i].faction != movingFaction)
+                            {
+                                blockedByEnemy = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (blockedByEnemy)
                     {
                         continue;
                     }
@@ -255,53 +248,21 @@ namespace EdoStrategy.Map
                 {
                     int x = i % Width;
                     int y = i / Width;
-                    UnitData occupant =
-                        unitManager != null
-                            ? unitManager.GetUnitAt(x, y)
-                            : null;
-                    bool canStop = occupant == null;
-                    if (occupant != null)
-                    {
-                        canStop = occupant.faction == movingFaction &&
-                                  HasImmediateMoveOrder(occupant);
-                    }
-
-                    if (!canStop)
-                    {
-                        continue;
-                    }
-
-                    bool reserved = false;
+                    bool blockedByEnemy = false;
                     if (unitManager != null)
                     {
-                        foreach (UnitData unit in unitManager.Units)
+                        List<UnitData> occupants =
+                            unitManager.GetUnitsAt(x, y);
+                        for (int j = 0; j < occupants.Count; j++)
                         {
-                            if (unit == null ||
-                                unit.faction != movingFaction ||
-                                unit.x == x && unit.y == y)
+                            if (occupants[j].faction != movingFaction)
                             {
-                                continue;
-                            }
-                            if (unit.pendingOrders != null &&
-                                unit.pendingOrders.Count > 0)
-                            {
-                                Order order = unit.pendingOrders[0];
-                                if (order != null &&
-                                    order.orderType == OrderType.Move &&
-                                    order.remainingDelayTurns == 0 &&
-                                    order.targetX == x &&
-                                    order.targetY == y)
-                                {
-                                    reserved = true;
-                                }
-                            }
-                            if (reserved)
-                            {
+                                blockedByEnemy = true;
                                 break;
                             }
                         }
                     }
-                    if (!reserved)
+                    if (!blockedByEnemy)
                     {
                         reachable.Add(new Vector2Int(x, y));
                     }
@@ -394,30 +355,24 @@ namespace EdoStrategy.Map
                 int currentY = current.Index / Width;
                 foreach (Vector2Int neighbor in GetNeighbors(currentX, currentY))
                 {
-                    UnitData occupant =
-                        unitManager != null
-                            ? unitManager.GetUnitAt(neighbor.x, neighbor.y)
-                            : null;
-                    if (occupant != null)
+                    bool blockedByEnemy = false;
+                    if (unitManager != null)
                     {
-                        if (neighbor.x == goalX && neighbor.y == goalY)
+                        List<UnitData> occupants =
+                            unitManager.GetUnitsAt(neighbor.x, neighbor.y);
+                        for (int i = 0; i < occupants.Count; i++)
                         {
-                            bool isVacatingFriendly =
-                                movingFaction != Faction.None &&
-                                occupant.faction == movingFaction &&
-                                HasImmediateMoveOrder(occupant);
-                            if (!isVacatingFriendly)
+                            if (occupants[i].faction != movingFaction ||
+                                movingFaction == Faction.None)
                             {
-                                continue;
+                                blockedByEnemy = true;
+                                break;
                             }
                         }
-                        bool isFriendly =
-                            movingFaction != Faction.None &&
-                            occupant.faction == movingFaction;
-                        if (!isFriendly)
-                        {
-                            continue;
-                        }
+                    }
+                    if (blockedByEnemy)
+                    {
+                        continue;
                     }
 
                     HexCell neighborCell = GetCell(neighbor.x, neighbor.y);

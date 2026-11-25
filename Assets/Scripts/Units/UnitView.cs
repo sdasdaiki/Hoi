@@ -22,6 +22,7 @@ namespace EdoStrategy.Units
         private SpriteRenderer plannedArrowHead;
         private SpriteRenderer selectionRing;
         private Vector3 targetWorldPosition;
+        private bool counterManaged;
 
         public UnitData UnitData
         {
@@ -390,6 +391,11 @@ namespace EdoStrategy.Units
 
         public void SetSelected(bool isSelected)
         {
+            if (counterManaged)
+            {
+                return;
+            }
+
             if (selectionRing == null)
             {
                 Transform ringTransform = transform.Find("SelectionRing");
@@ -428,6 +434,27 @@ namespace EdoStrategy.Units
             {
                 selectionRing.color =
                     new Color(1f, 0.95f, 0.25f, 0.95f);
+            }
+        }
+
+        public void SetCounterManaged(bool managed)
+        {
+            counterManaged = managed;
+            if (spriteRenderer != null)
+            {
+                spriteRenderer.enabled = !managed;
+            }
+            if (factionBadge != null)
+            {
+                factionBadge.enabled = !managed;
+            }
+            if (label != null)
+            {
+                label.gameObject.SetActive(!managed);
+            }
+            if (selectionRing != null)
+            {
+                selectionRing.enabled = !managed && selectionRing.enabled;
             }
         }
 

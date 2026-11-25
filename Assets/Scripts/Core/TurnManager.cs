@@ -20,9 +20,13 @@ namespace EdoStrategy.Core
         [SerializeField] private string loadMapName = "";
 
         public event System.Action OnCommandStateChanged;
+        public event System.Action<int, int, List<UnitData>>
+            OnCellUnitsSelected;
 
         private UnitManager unitManager;
         private UnitData selectedUnit;
+        private readonly List<UnitData> selectedUnits =
+            new List<UnitData>();
         private int turnNumber = 1;
 
         public BattleState State { get; private set; }
@@ -37,6 +41,10 @@ namespace EdoStrategy.Core
         public UnitData SelectedUnit
         {
             get { return selectedUnit; }
+        }
+        public IReadOnlyList<UnitData> SelectedUnits
+        {
+            get { return selectedUnits; }
         }
 
         private void Awake()
@@ -94,29 +102,99 @@ namespace EdoStrategy.Core
 
         public void SelectUnit(UnitData unit)
         {
-            if (unit == null || unit.faction != Faction.Player)
+            if (unit == null)
             {
-                selectedUnit = null;
-                OnCommandStateChanged?.Invoke();
+                SelectUnits(null);
                 return;
             }
-            selectedUnit = unit;
+
+            SelectUnits(new[] { unit });
+        }
+
+        public void SelectUnits(IEnumerable<UnitData> units)
+        {
+            selectedUnits.Clear();
+            if (units != null)
+            {
+                foreach (UnitData unit in units)
+                {
+                    if (unit != null &&
+                        unit.faction == Faction.Player &&
+                        unit.IsAlive &&
+                        !selectedUnits.Contains(unit))
+                    {
+                        selectedUnits.Add(unit);
+                    }
+                }
+            }
+
+            selectedUnit = selectedUnits.Count > 0
+                ? selectedUnits[0]
+                : null;
             OnCommandStateChanged?.Invoke();
+        }
+
+        public bool IsUnitSelected(UnitData unit)
+        {
+            return unit != null && selectedUnits.Contains(unit);
         }
 
         public bool TryMoveSelectedUnit(int targetX, int targetY)
         {
             if (State != BattleState.PlayerCommandPhase ||
-                selectedUnit == null)
+                selectedUnits.Count == 0)
+            {
+                return false;
+            }
+
+            bool success = true;
+            foreach (UnitData unit in new List<UnitData>(selectedUnits))
+            {
+                if (!IssueMoveOrder(unit, targetX, targetY))
+                {
+                    success = false;
+                }
+            }
+            return success;
+        }
+
+        public bool IssueMoveOrder(UnitData unit, int targetX, int targetY)
+        {
+            if (unit == null ||
+                unit.faction != Faction.Player ||
+                State != BattleState.PlayerCommandPhase)
             {
                 return false;
             }
 
             UnitDefinition definition =
                 gameManager != null
-                    ? gameManager.GetUnitDefinition(GetUnitTypeId(selectedUnit))
+                    ? gameManager.GetUnitDefinition(GetUnitTypeId(unit))
                     : null;
-            return TryMoveUnit(selectedUnit, targetX, targetY, definition);
+            return TryMoveUnit(unit, targetX, targetY, definition);
+        }
+
+        public void CancelOrder(UnitData unit, OrderType orderType)
+        {
+            if (unit == null || unit.pendingOrders == null)
+            {
+                return;
+            }
+
+            bool removed = false;
+            for (int i = unit.pendingOrders.Count - 1; i >= 0; i--)
+            {
+                Order order = unit.pendingOrders[i];
+                if (order != null && order.orderType == orderType)
+                {
+                    unit.pendingOrders.RemoveAt(i);
+                    removed = true;
+                }
+            }
+            if (removed)
+            {
+                OnCommandStateChanged?.Invoke();
+            }
         }
 
         private IEnumerator InitializeBattleAfterMapView()
@@ -187,8 +265,6 @@ namespace EdoStrategy.Core
                 return;
             }
 
-            ResolveReciprocalMoveOrders();
-
             for (int pass = 0; pass <= unitManager.Units.Count; pass++)
             {
                 bool anyMoved = false;
@@ -229,26 +305,19 @@ namespace EdoStrategy.Core
                     for (int i = 1; i < path.Count; i++)
                     {
                         Vector2Int step = path[i];
-                        UnitData occupant = unitManager.GetUnitAt(step.x, step.y);
-                        if (occupant != null)
+                        List<UnitData> occupants =
+                            unitManager.GetUnitsAt(step.x, step.y);
+                        bool blockedByEnemy = false;
+                        for (int j = 0; j < occupants.Count; j++)
                         {
-                            if (occupant.faction == unit.faction)
+                            if (occupants[j].faction != unit.faction)
                             {
-                                HexCell friendlyPassCell = grid.GetCell(step.x, step.y);
-                                TerrainDefinition friendlyPassTerrain =
-                                    grid.GetTerrainDefinition(friendlyPassCell.terrainId);
-                                int friendlyPassCost = definition != null
-                                    ? definition.GetMoveCost(friendlyPassTerrain)
-                                    : grid.GetMoveCost(step.x, step.y);
-                                if (friendlyPassCost < 0 ||
-                                    consumedMoveCost + friendlyPassCost >
-                                        unit.remainingMovePoints)
-                                {
-                                    break;
-                                }
-                                consumedMoveCost += friendlyPassCost;
-                                continue;
+                                blockedByEnemy = true;
+                                break;
                             }
+                        }
+                        if (blockedByEnemy)
+                        {
                             break;
                         }
 
@@ -465,7 +534,7 @@ namespace EdoStrategy.Core
                 {
                     HexCell cell = grid.GetCell(x, y);
                     if (cell.deployZoneFaction == zoneFaction &&
-                        unitManager.GetUnitAt(x, y) == null)
+                        !HasEnemyAt(x, y, faction))
                     {
                         return new Vector2Int(x, y);
                     }
@@ -483,7 +552,7 @@ namespace EdoStrategy.Core
             {
                 for (int x = startX; x < endX; x++)
                 {
-                    if (unitManager.GetUnitAt(x, y) == null)
+                    if (!HasEnemyAt(x, y, faction))
                     {
                         return new Vector2Int(x, y);
                     }
@@ -491,6 +560,24 @@ namespace EdoStrategy.Core
             }
 
             return new Vector2Int(-1, -1);
+        }
+
+        private bool HasEnemyAt(int x, int y, Faction faction)
+        {
+            if (unitManager == null)
+            {
+                return false;
+            }
+
+            List<UnitData> occupants = unitManager.GetUnitsAt(x, y);
+            for (int i = 0; i < occupants.Count; i++)
+            {
+                if (occupants[i].faction != faction)
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private bool TryMoveUnit(
@@ -503,9 +590,8 @@ namespace EdoStrategy.Core
 
             if (unit.x == targetX && unit.y == targetY)
             {
-                int oldX = unit.x;
-                int oldY = unit.y;
-                CancelMoveOrdersAndDependents(unit);
+                ClearMoveOrders(unit);
+                OnCommandStateChanged?.Invoke();
                 Debug.Log(
                     string.Format(
                         "移動予定キャンセル: ({0},{1})",
@@ -527,22 +613,17 @@ namespace EdoStrategy.Core
                 return false;
             }
 
-            UnitData occupant = unitManager.GetUnitAt(targetX, targetY);
-            if (occupant != null)
+            if (HasEnemyAt(targetX, targetY, unit.faction))
             {
-                if (occupant.faction != unit.faction ||
-                    !HexGrid.HasImmediateMoveOrder(occupant))
-                {
-                    Debug.LogWarning(
-                        string.Format(
-                            "移動失敗: 他のユニットが占有中 ({0},{1}) -> ({2},{3}), 残り移動力={4}",
-                            unit.x,
-                            unit.y,
-                            targetX,
-                            targetY,
-                            unit.remainingMovePoints));
-                    return false;
-                }
+                Debug.LogWarning(
+                    string.Format(
+                        "移動失敗: 敵部隊が占有中 ({0},{1}) -> ({2},{3}), 残り移動力={4}",
+                        unit.x,
+                        unit.y,
+                        targetX,
+                        targetY,
+                        unit.remainingMovePoints));
+                return false;
             }
 
             List<Vector2Int> path =
@@ -611,25 +692,6 @@ namespace EdoStrategy.Core
                 return false;
             }
 
-            foreach (UnitData otherUnit in unitManager.Units)
-            {
-                if (otherUnit == unit ||
-                    otherUnit.faction != unit.faction)
-                {
-                    continue;
-                }
-                if (HasMoveOrder(otherUnit, out Order otherMove) &&
-                    otherMove.remainingDelayTurns == 0 &&
-                    otherMove.targetX == targetX &&
-                    otherMove.targetY == targetY)
-                {
-                    Debug.LogWarning(
-                        "移動予約失敗: 他の自軍ユニットが既に移動予定先にしています (" +
-                        targetX + "," + targetY + ")");
-                    return false;
-                }
-            }
-
             ClearMoveOrders(unit);
             var moveOrder = new Order
             {
@@ -670,83 +732,24 @@ namespace EdoStrategy.Core
                     new Vector3(screenPosition.x, screenPosition.y, battleCamera.nearClipPlane));
             Vector3Int cellPosition = tilemap.WorldToCell(worldPosition);
 
-            UnitData clickedUnit =
-                unitManager.GetUnitAt(cellPosition.x, cellPosition.y);
-            if (clickedUnit != null)
+            List<UnitData> clickedUnits =
+                unitManager.GetUnitsAt(cellPosition.x, cellPosition.y);
+            OnCellUnitsSelected?.Invoke(
+                cellPosition.x,
+                cellPosition.y,
+                clickedUnits);
+            if (clickedUnits.Count > 0)
             {
-                if (clickedUnit.faction == Faction.Player)
-                {
-                    if (clickedUnit == selectedUnit)
-                    {
-                        TryMoveSelectedUnit(
-                            cellPosition.x,
-                            cellPosition.y);
-                        return;
-                    }
-
-                    if (selectedUnit != null &&
-                        IsInSelectedUnitReachableCells(
-                            cellPosition.x,
-                            cellPosition.y))
-                    {
-                        TryMoveSelectedUnit(
-                            cellPosition.x,
-                            cellPosition.y);
-                        return;
-                    }
-
-                    SelectUnit(clickedUnit);
-                }
                 return;
             }
 
-            if (selectedUnit != null &&
+            if (selectedUnits.Count > 0 &&
                 !TryMoveSelectedUnit(
                     cellPosition.x,
                     cellPosition.y))
             {
                 SelectUnit(null);
             }
-        }
-
-        private bool IsInSelectedUnitReachableCells(int x, int y)
-        {
-            if (selectedUnit == null ||
-                mapView == null ||
-                mapView.Grid == null)
-            {
-                return false;
-            }
-
-            UnitDefinition definition =
-                gameManager != null
-                    ? gameManager.GetUnitDefinition(
-                        GetUnitTypeId(selectedUnit))
-                    : null;
-            int movePoints =
-                definition != null ? definition.movePoints : 0;
-            if (movePoints <= 0)
-            {
-                return false;
-            }
-
-            List<Vector2Int> reachable =
-                mapView.Grid.GetReachableCells(
-                    selectedUnit.x,
-                    selectedUnit.y,
-                    movePoints,
-                    Faction.Player,
-                    definition,
-                    unitManager);
-            for (int i = 0; i < reachable.Count; i++)
-            {
-                if (reachable[i].x == x &&
-                    reachable[i].y == y)
-                {
-                    return true;
-                }
-            }
-            return false;
         }
 
         public bool HasMoveOrder(UnitData unit, out Order moveOrder)
@@ -784,175 +787,6 @@ namespace EdoStrategy.Core
                 if (order != null && order.orderType == OrderType.Move)
                 {
                     unit.pendingOrders.RemoveAt(i);
-                }
-            }
-        }
-
-        private void CancelMoveOrdersAndDependents(UnitData cancelledUnit)
-        {
-            var freedPositions = new List<Vector2Int>();
-            if (cancelledUnit != null)
-            {
-                freedPositions.Add(new Vector2Int(cancelledUnit.x, cancelledUnit.y));
-            }
-
-            for (int pass = 0; pass <= unitManager.Units.Count; pass++)
-            {
-                bool cancelledAny = false;
-                foreach (UnitData unit in unitManager.Units)
-                {
-                    if (unit == null)
-                    {
-                        continue;
-                    }
-
-                    if (HasMoveOrder(unit, out Order moveOrder))
-                    {
-                        bool targetsFreedPosition = false;
-                        for (int i = 0; i < freedPositions.Count; i++)
-                        {
-                            if (moveOrder.targetX == freedPositions[i].x &&
-                                moveOrder.targetY == freedPositions[i].y)
-                            {
-                                targetsFreedPosition = true;
-                                break;
-                            }
-                        }
-
-                        if (targetsFreedPosition)
-                        {
-                            ClearMoveOrders(unit);
-                            if (!freedPositions.Contains(
-                                new Vector2Int(unit.x, unit.y)))
-                            {
-                                freedPositions.Add(
-                                    new Vector2Int(unit.x, unit.y));
-                            }
-                            cancelledAny = true;
-                            OnCommandStateChanged?.Invoke();
-                        }
-                    }
-                }
-
-                if (!cancelledAny)
-                {
-                    break;
-                }
-            }
-
-            if (cancelledUnit != null)
-            {
-                ClearMoveOrders(cancelledUnit);
-            }
-            OnCommandStateChanged?.Invoke();
-        }
-
-        private void ResolveReciprocalMoveOrders()
-        {
-            if (unitManager == null)
-            {
-                return;
-            }
-
-            var pendingUnits = new List<UnitData>();
-            foreach (UnitData unit in unitManager.Units)
-            {
-                if (unit != null &&
-                    unit.IsAlive &&
-                    HasMoveOrder(unit, out Order moveOrder) &&
-                    moveOrder.remainingDelayTurns == 0)
-                {
-                    pendingUnits.Add(unit);
-                }
-            }
-
-            var resolved = new bool[pendingUnits.Count];
-            for (int start = 0; start < pendingUnits.Count; start++)
-            {
-                if (resolved[start])
-                {
-                    continue;
-                }
-
-                var cycle = new List<int>();
-                var cyclePosition = new int[pendingUnits.Count];
-                for (int i = 0; i < cyclePosition.Length; i++)
-                {
-                    cyclePosition[i] = -1;
-                }
-
-                int current = start;
-                while (current >= 0 &&
-                       !resolved[current] &&
-                       cyclePosition[current] < 0)
-                {
-                    cyclePosition[current] = cycle.Count;
-                    cycle.Add(current);
-
-                    UnitData currentUnit = pendingUnits[current];
-                    if (!HasMoveOrder(currentUnit, out Order currentMove))
-                    {
-                        current = -1;
-                        break;
-                    }
-
-                    current = -1;
-                    for (int next = 0; next < pendingUnits.Count; next++)
-                    {
-                        UnitData candidate = pendingUnits[next];
-                        if (candidate.x == currentMove.targetX &&
-                            candidate.y == currentMove.targetY)
-                        {
-                            current = next;
-                            break;
-                        }
-                    }
-                }
-
-                if (current >= 0 &&
-                    cyclePosition[current] >= 0 &&
-                    cycle.Count >= 2)
-                {
-                    var originalPositions =
-                        new Vector2Int[cycle.Count];
-                    var targetPositions =
-                        new Vector2Int[cycle.Count];
-                    for (int i = 0; i < cycle.Count; i++)
-                    {
-                        UnitData unit = pendingUnits[cycle[i]];
-                        originalPositions[i] =
-                            new Vector2Int(unit.x, unit.y);
-                        HasMoveOrder(unit, out Order moveOrder);
-                        targetPositions[i] =
-                            new Vector2Int(moveOrder.targetX, moveOrder.targetY);
-                    }
-
-                    bool isClosedCycle = true;
-                    for (int i = 0; i < cycle.Count; i++)
-                    {
-                        if (targetPositions[i] !=
-                            originalPositions[(i + 1) % cycle.Count])
-                        {
-                            isClosedCycle = false;
-                            break;
-                        }
-                    }
-
-                    if (isClosedCycle)
-                    {
-                        for (int i = 0; i < cycle.Count; i++)
-                        {
-                            UnitData unit = pendingUnits[cycle[i]];
-                            unit.x = targetPositions[i].x;
-                            unit.y = targetPositions[i].y;
-                            unit.remainingMovePoints = 0;
-                            HasMoveOrder(unit, out Order moveOrder);
-                            unit.pendingOrders.Remove(moveOrder);
-                            unitManager.NotifyUnitMoved(unit);
-                            resolved[cycle[i]] = true;
-                        }
-                        OnCommandStateChanged?.Invoke();
-                    }
                 }
             }
         }
