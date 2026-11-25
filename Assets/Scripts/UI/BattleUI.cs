@@ -97,6 +97,8 @@ namespace EdoStrategy.UI
             {
                 subscribedTurnManager.OnCellUnitsSelected -=
                     ShowUnitsAtCell;
+                subscribedTurnManager.OnCommandStateChanged -=
+                    HandleCommandStateChanged;
             }
         }
 
@@ -458,6 +460,25 @@ namespace EdoStrategy.UI
             RebuildUnitListRows();
         }
 
+        private void HandleCommandStateChanged()
+        {
+            if (turnManager != null &&
+                turnManager.State != BattleState.PlayerCommandPhase)
+            {
+                CloseUnitListPanel();
+            }
+        }
+
+        private void CloseUnitListPanel()
+        {
+            if (unitListPanel != null)
+            {
+                unitListPanel.SetActive(false);
+            }
+            displayedUnits.Clear();
+            ClearUnitListRows();
+        }
+
         private void RebuildUnitListRows()
         {
             ClearUnitListRows();
@@ -699,12 +720,16 @@ namespace EdoStrategy.UI
             {
                 subscribedTurnManager.OnCellUnitsSelected -=
                     ShowUnitsAtCell;
+                subscribedTurnManager.OnCommandStateChanged -=
+                    HandleCommandStateChanged;
             }
             subscribedTurnManager = turnManager;
             if (subscribedTurnManager != null)
             {
                 subscribedTurnManager.OnCellUnitsSelected +=
                     ShowUnitsAtCell;
+                subscribedTurnManager.OnCommandStateChanged +=
+                    HandleCommandStateChanged;
             }
         }
 

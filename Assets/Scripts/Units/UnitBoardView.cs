@@ -431,9 +431,6 @@ namespace EdoStrategy.Units
 
         private void RefreshPlannedArrows()
         {
-            UnitData selectedUnit =
-                turnManager != null ? turnManager.SelectedUnit : null;
-
             foreach (KeyValuePair<UnitData, UnitView> entry in views)
             {
                 UnitData unit = entry.Key;
@@ -447,7 +444,8 @@ namespace EdoStrategy.Units
                     unit.faction == Faction.Player &&
                     HasMoveOrder(unit) &&
                     (ShowAllPlannedArrows ||
-                     unit == selectedUnit);
+                     (turnManager != null &&
+                      turnManager.IsUnitSelected(unit)));
                 view.SetArrowVisible(visible);
             }
         }

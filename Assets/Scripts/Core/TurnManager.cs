@@ -107,6 +107,8 @@ namespace EdoStrategy.Core
             }
 
             State = BattleState.ExecutionPhase;
+            selectedUnit = null;
+            selectedUnits.Clear();
             OnCommandStateChanged?.Invoke();
             StartCoroutine(RunExecutionSequence());
         }
