@@ -5,6 +5,7 @@ using EdoStrategy.Map;
 using EdoStrategy.Units;
 using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 namespace EdoStrategy.UI
@@ -17,6 +18,7 @@ namespace EdoStrategy.UI
         [SerializeField] private UnitBoardView unitBoardView;
         [SerializeField] private TMP_FontAsset japaneseFont;
 
+        private GameObject statusPanel;
         private TextMeshProUGUI statusLabel;
         private Button startBattleButton;
         private Button endTurnButton;
@@ -68,10 +70,16 @@ namespace EdoStrategy.UI
             if (turnManager == null)
             {
                 turnManager = FindObjectOfType<TurnManager>();
-                if (turnManager == null)
-                {
-                    return;
-                }
+            }
+            if (Input.GetKeyDown(KeyCode.Q) &&
+                !IsInputFieldFocused() &&
+                statusPanel != null)
+            {
+                statusPanel.SetActive(!statusPanel.activeSelf);
+            }
+            if (turnManager == null)
+            {
+                return;
             }
             if (unitBoardView == null)
             {
@@ -224,19 +232,40 @@ namespace EdoStrategy.UI
 
             TMP_FontAsset font = LoadMeiryoFont();
 
-            RectTransform statusRect = CreateUiRect(
-                "Battle Status",
+            RectTransform statusPanelRect = CreateUiRect(
+                "Battle Status Panel",
                 canvas.transform,
                 new Vector2(0f, 1f),
                 new Vector2(0f, 1f),
                 new Vector2(16f, -16f),
-                new Vector2(420f, 120f));
-            statusLabel = statusRect.gameObject.AddComponent<TextMeshProUGUI>();
+                new Vector2(480f, 350f));
+            statusPanel = statusPanelRect.gameObject;
+            Image statusBackground =
+                statusPanel.AddComponent<Image>();
+            statusBackground.sprite = GetUiRectangleSprite();
+            statusBackground.color = new Color(0f, 0f, 0f, 0.65f);
+
+            RectTransform statusTextRect = CreateUiRect(
+                "Battle Status Text",
+                statusPanelRect,
+                Vector2.zero,
+                Vector2.one,
+                Vector2.zero,
+                Vector2.zero);
+            statusTextRect.offsetMin = new Vector2(14f, 12f);
+            statusTextRect.offsetMax = new Vector2(-14f, -12f);
+            statusLabel =
+                statusTextRect.gameObject.AddComponent<TextMeshProUGUI>();
             statusLabel.font = font;
-            statusLabel.fontSize = 28f;
+            statusLabel.fontSize = 22f;
             statusLabel.color = Color.white;
             statusLabel.alignment = TextAlignmentOptions.TopLeft;
+            statusLabel.enableWordWrapping = true;
+            statusLabel.enableAutoSizing = true;
+            statusLabel.fontSizeMin = 17f;
+            statusLabel.fontSizeMax = 22f;
             statusLabel.text = "Phase";
+            statusLabel.raycastTarget = false;
 
             RectTransform buttonRect = CreateUiRect(
                 "Battle Buttons",
@@ -623,7 +652,19 @@ namespace EdoStrategy.UI
 
         private void OnSelectCellUnit(UnitData unit)
         {
-            if (turnManager != null)
+            if (turnManager == null)
+            {
+                return;
+            }
+
+            bool shiftHeld =
+                Input.GetKey(KeyCode.LeftShift) ||
+                Input.GetKey(KeyCode.RightShift);
+            if (shiftHeld)
+            {
+                turnManager.ToggleUnitSelection(unit);
+            }
+            else
             {
                 turnManager.SelectUnit(unit);
             }
@@ -867,6 +908,20 @@ namespace EdoStrategy.UI
                     typeof(UnityEngine.EventSystems.EventSystem),
                     typeof(UnityEngine.EventSystems.StandaloneInputModule));
             }
+        }
+
+        private static bool IsInputFieldFocused()
+        {
+            if (EventSystem.current == null ||
+                EventSystem.current.currentSelectedGameObject == null)
+            {
+                return false;
+            }
+
+            GameObject selected =
+                EventSystem.current.currentSelectedGameObject;
+            return selected.GetComponentInParent<TMP_InputField>() != null ||
+                   selected.GetComponentInParent<InputField>() != null;
         }
 
         private static Sprite GetUiRectangleSprite()

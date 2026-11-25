@@ -139,6 +139,30 @@ namespace EdoStrategy.Core
             OnCommandStateChanged?.Invoke();
         }
 
+        public void ToggleUnitSelection(UnitData unit)
+        {
+            if (unit == null ||
+                unit.faction != Faction.Player ||
+                !unit.IsAlive)
+            {
+                return;
+            }
+
+            if (selectedUnits.Contains(unit))
+            {
+                selectedUnits.Remove(unit);
+            }
+            else
+            {
+                selectedUnits.Add(unit);
+            }
+
+            selectedUnit = selectedUnits.Count > 0
+                ? selectedUnits[0]
+                : null;
+            OnCommandStateChanged?.Invoke();
+        }
+
         public bool IsUnitSelected(UnitData unit)
         {
             return unit != null && selectedUnits.Contains(unit);
@@ -152,15 +176,15 @@ namespace EdoStrategy.Core
                 return false;
             }
 
-            bool success = true;
+            bool anyIssued = false;
             foreach (UnitData unit in new List<UnitData>(selectedUnits))
             {
-                if (!IssueMoveOrder(unit, targetX, targetY))
+                if (IssueMoveOrder(unit, targetX, targetY))
                 {
-                    success = false;
+                    anyIssued = true;
                 }
             }
-            return success;
+            return anyIssued;
         }
 
         public bool IssueMoveOrder(UnitData unit, int targetX, int targetY)
@@ -769,6 +793,20 @@ namespace EdoStrategy.Core
                 clickedUnits);
             if (clickedUnits.Count > 0)
             {
+                UnitData onlyPlayerUnit = null;
+                int playerUnitCount = 0;
+                for (int i = 0; i < clickedUnits.Count; i++)
+                {
+                    if (clickedUnits[i].faction == Faction.Player)
+                    {
+                        onlyPlayerUnit = clickedUnits[i];
+                        playerUnitCount++;
+                    }
+                }
+                if (playerUnitCount == 1)
+                {
+                    SelectUnit(onlyPlayerUnit);
+                }
                 return;
             }
 
