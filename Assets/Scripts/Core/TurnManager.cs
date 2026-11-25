@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using EdoStrategy.Combat;
 using EdoStrategy.Command;
 using EdoStrategy.Map;
 using EdoStrategy.UI;
@@ -13,6 +14,47 @@ namespace EdoStrategy.Core
     [DefaultExecutionOrder(-50)]
     public class TurnManager : MonoBehaviour
     {
+        private sealed class PlannedMove
+        {
+            public UnitData unit;
+            public Order order;
+            public UnitDefinition definition;
+            public List<Vector2Int> path;
+            public List<Vector2Int> traversedPath;
+            public int nextPathIndex = 1;
+            public int consumedMoveCost;
+            public int movePoints;
+            public int startX;
+            public int startY;
+            public bool stopped;
+            public bool moved;
+        }
+
+        private sealed class MoveProposal
+        {
+            public PlannedMove move;
+            public Vector2Int destination;
+            public int stepCost;
+            public int cumulativeCost;
+        }
+
+        private sealed class AttackEntry
+        {
+            public UnitData attacker;
+            public Order order;
+            public UnitDefinition attackerDefinition;
+            public int attackRange;
+            public int sequence;
+        }
+
+        private sealed class ResolvedAttack
+        {
+            public UnitData attacker;
+            public Faction defenderFaction;
+            public int targetX;
+            public int targetY;
+        }
+
         [SerializeField] private HexTilemapView mapView;
         [SerializeField] private UnitBoardView unitBoardView;
         [SerializeField] private GameManager gameManager;
@@ -29,8 +71,11 @@ namespace EdoStrategy.Core
         private UnitData selectedUnit;
         private readonly List<UnitData> selectedUnits =
             new List<UnitData>();
+        private readonly List<string> combatLog = new List<string>();
         private int turnNumber = 1;
 
+        public event System.Action<bool> OnBattleEnded;
+        public event System.Action<string> OnCombatLogUpdated;
         public BattleState State { get; private set; }
         public int TurnNumber
         {
@@ -47,6 +92,10 @@ namespace EdoStrategy.Core
         public IReadOnlyList<UnitData> SelectedUnits
         {
             get { return selectedUnits; }
+        }
+        public IReadOnlyList<string> CombatLog
+        {
+            get { return combatLog; }
         }
 
         private void Awake()
@@ -264,6 +313,7 @@ namespace EdoStrategy.Core
         public bool IssueMoveOrder(UnitData unit, int targetX, int targetY)
         {
             if (unit == null ||
+                !unit.IsAlive ||
                 unit.faction != Faction.Player ||
                 State != BattleState.PlayerCommandPhase)
             {
@@ -275,6 +325,54 @@ namespace EdoStrategy.Core
                     ? gameManager.GetUnitDefinition(GetUnitTypeId(unit))
                     : null;
             return TryMoveUnit(unit, targetX, targetY, definition);
+        }
+
+        public bool TryAttackSelectedUnits(UnitData target)
+        {
+            if (State != BattleState.PlayerCommandPhase ||
+                selectedUnits.Count == 0 ||
+                target == null ||
+                !target.IsAlive ||
+                target.faction != Faction.Enemy ||
+                string.IsNullOrEmpty(target.unitId))
+            {
+                return false;
+            }
+
+            bool issuedAny = false;
+            for (int i = 0; i < selectedUnits.Count; i++)
+            {
+                UnitData attacker = selectedUnits[i];
+                UnitDefinition definition =
+                    gameManager != null
+                        ? gameManager.GetUnitDefinition(GetUnitTypeId(attacker))
+                        : null;
+                if (!CombatResolver.CanAttack(attacker, target, definition))
+                {
+                    continue;
+                }
+
+                if (attacker.pendingOrders == null)
+                {
+                    attacker.pendingOrders = new List<Order>();
+                }
+                attacker.pendingOrders.Clear();
+                attacker.pendingOrders.Add(new Order
+                {
+                    orderType = OrderType.Attack,
+                    targetUnitId = target.unitId,
+                    targetX = target.x,
+                    targetY = target.y,
+                    remainingDelayTurns = 0
+                });
+                issuedAny = true;
+            }
+
+            if (issuedAny)
+            {
+                OnCommandStateChanged?.Invoke();
+            }
+            return issuedAny;
         }
 
         public void CancelOrder(UnitData unit, OrderType orderType)
@@ -342,8 +440,31 @@ namespace EdoStrategy.Core
         {
             yield return null;
 
-            bool movedUnits = ExecutePlannedMoves();
+            List<AttackEntry> readyAttacks = GetReadyAttackEntries();
+            bool movedUnits = ExecutePlannedMoves(readyAttacks);
             if (movedUnits)
+            {
+                if (unitBoardView != null &&
+                    unitBoardView.IsAnimatingUnits)
+                {
+                    while (unitBoardView.IsAnimatingUnits)
+                    {
+                        yield return null;
+                    }
+                }
+                else
+                {
+                    yield return new WaitForSeconds(0.35f);
+                }
+            }
+            yield return null;
+
+            var engagedUnits = new HashSet<UnitData>();
+            bool combatMovedUnits =
+                ResolveCombatAndAftermath(engagedUnits, readyAttacks);
+            RecoverNonCombatUnits(engagedUnits);
+
+            if (combatMovedUnits)
             {
                 if (unitBoardView != null &&
                     unitBoardView.IsAnimatingUnits)
@@ -374,126 +495,798 @@ namespace EdoStrategy.Core
             turnNumber++;
             ResetRemainingMovePoints();
             State = BattleState.PlayerCommandPhase;
+            OnCommandStateChanged?.Invoke();
         }
 
-        private bool ExecutePlannedMoves()
+        private bool ExecutePlannedMoves(List<AttackEntry> readyAttacks)
         {
             if (unitManager == null)
             {
                 return false;
             }
 
-            bool movedUnits = false;
-            for (int pass = 0; pass <= unitManager.Units.Count; pass++)
+            HashSet<UnitData> pinnedUnits =
+                GetUnitsPinnedByReadyAttacks(readyAttacks);
+            var plannedMoves = new List<PlannedMove>();
+            foreach (UnitData unit in new List<UnitData>(unitManager.Units))
             {
-                bool anyMoved = false;
-
-                foreach (UnitData unit in new List<UnitData>(unitManager.Units))
+                if (unit == null ||
+                    !unit.IsAlive ||
+                    !HasMoveOrder(unit, out Order moveOrder) ||
+                    moveOrder.remainingDelayTurns > 0)
                 {
-                    if (!unit.IsAlive ||
-                        !HasMoveOrder(unit, out Order moveOrder))
-                    {
-                        continue;
-                    }
-                    if (moveOrder.remainingDelayTurns != 0)
-                    {
-                        continue;
-                    }
-
-                    UnitDefinition definition =
-                        gameManager != null
-                            ? gameManager.GetUnitDefinition(GetUnitTypeId(unit))
-                            : null;
-                    HexGrid grid = mapView.Grid;
-                    List<Vector2Int> path =
-                        moveOrder.path != null
-                            ? moveOrder.path
-                            : new List<Vector2Int>();
-                    if (path.Count < 2)
-                    {
-                        unit.pendingOrders.Remove(moveOrder);
-                        OnCommandStateChanged?.Invoke();
-                        continue;
-                    }
-
-                    int consumedMoveCost = 0;
-                    int fromX = unit.x;
-                    int fromY = unit.y;
-                    var traversedPath = new List<Vector2Int>
-                    {
-                        new Vector2Int(fromX, fromY)
-                    };
-
-                    for (int i = 1; i < path.Count; i++)
-                    {
-                        Vector2Int step = path[i];
-                        List<UnitData> occupants =
-                            unitManager.GetUnitsAt(step.x, step.y);
-                        bool blockedByEnemy = false;
-                        for (int j = 0; j < occupants.Count; j++)
-                        {
-                            if (occupants[j].faction != unit.faction)
-                            {
-                                blockedByEnemy = true;
-                                break;
-                            }
-                        }
-                        if (blockedByEnemy)
-                        {
-                            break;
-                        }
-
-                        HexCell cell = grid.GetCell(step.x, step.y);
-                        TerrainDefinition terrain =
-                            grid.GetTerrainDefinition(cell.terrainId);
-                        int moveCost = definition != null
-                            ? definition.GetMoveCost(terrain)
-                            : grid.GetMoveCost(step.x, step.y);
-                        if (moveCost < 0 ||
-                            consumedMoveCost + moveCost >
-                                unit.remainingMovePoints)
-                        {
-                            break;
-                        }
-
-                        consumedMoveCost += moveCost;
-                        traversedPath.Add(step);
-                    }
-
-                    bool movedThisPass =
-                        traversedPath.Count > 1 &&
-                        unitManager.MoveUnitAlongPath(
-                            unit,
-                            traversedPath[traversedPath.Count - 1].x,
-                            traversedPath[traversedPath.Count - 1].y,
-                            traversedPath);
-                    if (!movedThisPass)
-                    {
-                        continue;
-                    }
-
-                    unit.remainingMovePoints -= consumedMoveCost;
-                    anyMoved = true;
-                    movedUnits = true;
-                    unit.pendingOrders.Remove(moveOrder);
-                    OnCommandStateChanged?.Invoke();
-                    Debug.Log(
-                        string.Format(
-                            "予定移動実行: ({0},{1}) -> ({2},{3}), 消費コスト={4}, 残り移動力={5}",
-                            fromX,
-                            fromY,
-                            unit.x,
-                            unit.y,
-                            consumedMoveCost,
-                            unit.remainingMovePoints));
+                    continue;
                 }
 
-                if (!anyMoved)
+                if (pinnedUnits.Contains(unit))
+                {
+                    AddCombatLog(unit.unitName + " は攻撃対象として釘付けとなり、移動を見送りました。");
+                    continue;
+                }
+
+                List<Vector2Int> path = moveOrder.path;
+                if (path == null ||
+                    path.Count < 2 ||
+                    path[0].x != unit.x ||
+                    path[0].y != unit.y)
+                {
+                    RemoveOrder(unit, moveOrder);
+                    continue;
+                }
+
+                UnitDefinition definition = GetUnitDefinition(unit);
+                plannedMoves.Add(new PlannedMove
+                {
+                    unit = unit,
+                    order = moveOrder,
+                    definition = definition,
+                    path = new List<Vector2Int>(path),
+                    traversedPath = new List<Vector2Int>
+                    {
+                        new Vector2Int(unit.x, unit.y)
+                    },
+                    movePoints = definition != null ? definition.movePoints : 0,
+                    startX = unit.x,
+                    startY = unit.y
+                });
+            }
+
+            bool movedUnits = false;
+            HexGrid grid = mapView != null ? mapView.Grid : null;
+            while (grid != null)
+            {
+                var proposalsByCell =
+                    new Dictionary<Vector2Int, List<MoveProposal>>();
+
+                for (int i = 0; i < plannedMoves.Count; i++)
+                {
+                    PlannedMove move = plannedMoves[i];
+                    if (move.stopped)
+                    {
+                        continue;
+                    }
+
+                    if (move.nextPathIndex >= move.path.Count)
+                    {
+                        move.stopped = true;
+                        continue;
+                    }
+
+                    Vector2Int next = move.path[move.nextPathIndex];
+                    if (!grid.IsInBounds(next.x, next.y) ||
+                        HasLivingEnemyAt(next.x, next.y, move.unit.faction))
+                    {
+                        move.stopped = true;
+                        continue;
+                    }
+
+                    HexCell cell = grid.GetCell(next.x, next.y);
+                    TerrainDefinition terrain = cell == null
+                        ? null
+                        : grid.GetTerrainDefinition(cell.terrainId);
+                    int stepCost = move.definition != null
+                        ? move.definition.GetMoveCost(terrain)
+                        : grid.GetMoveCost(next.x, next.y);
+                    if (stepCost < 0 ||
+                        move.consumedMoveCost + stepCost >
+                            move.unit.remainingMovePoints)
+                    {
+                        move.stopped = true;
+                        continue;
+                    }
+
+                    var proposal = new MoveProposal
+                    {
+                        move = move,
+                        destination = next,
+                        stepCost = stepCost,
+                        cumulativeCost = move.consumedMoveCost + stepCost
+                    };
+                    List<MoveProposal> proposals;
+                    if (!proposalsByCell.TryGetValue(next, out proposals))
+                    {
+                        proposals = new List<MoveProposal>();
+                        proposalsByCell.Add(next, proposals);
+                    }
+                    proposals.Add(proposal);
+                }
+
+                var winningProposals = new List<MoveProposal>();
+                foreach (KeyValuePair<Vector2Int, List<MoveProposal>> entry
+                    in proposalsByCell)
+                {
+                    MoveProposal winner = SelectMoveWinner(entry.Value);
+                    winningProposals.Add(winner);
+                    for (int i = 0; i < entry.Value.Count; i++)
+                    {
+                        MoveProposal proposal = entry.Value[i];
+                        if (proposal == winner)
+                        {
+                            continue;
+                        }
+
+                        proposal.move.stopped = true;
+                        AddCombatLog(
+                            proposal.move.unit.unitName +
+                            " は同時移動の競合に敗れ、直前のマスで停止しました。");
+                    }
+                }
+
+                if (winningProposals.Count == 0)
                 {
                     break;
                 }
+
+                for (int i = 0; i < winningProposals.Count; i++)
+                {
+                    MoveProposal proposal = winningProposals[i];
+                    PlannedMove move = proposal.move;
+                    move.unit.x = proposal.destination.x;
+                    move.unit.y = proposal.destination.y;
+                    move.consumedMoveCost += proposal.stepCost;
+                    move.nextPathIndex++;
+                    move.traversedPath.Add(proposal.destination);
+                    move.moved = true;
+                    movedUnits = true;
+                }
+            }
+
+            for (int i = 0; i < plannedMoves.Count; i++)
+            {
+                PlannedMove move = plannedMoves[i];
+                if (move.moved)
+                {
+                    int targetX = move.unit.x;
+                    int targetY = move.unit.y;
+                    move.unit.x = move.startX;
+                    move.unit.y = move.startY;
+                    if (!unitManager.MoveUnitAlongPath(
+                            move.unit,
+                            targetX,
+                            targetY,
+                            move.traversedPath))
+                    {
+                        move.unit.x = targetX;
+                        move.unit.y = targetY;
+                        unitManager.NotifyUnitMoved(move.unit);
+                    }
+
+                    move.unit.remainingMovePoints = Mathf.Max(
+                        0,
+                        move.unit.remainingMovePoints - move.consumedMoveCost);
+                    AddCombatLog(
+                        move.unit.unitName +
+                        " は (" + targetX + "," + targetY + ") まで移動しました。");
+                }
+
+                RemoveOrder(move.unit, move.order);
+            }
+
+            if (plannedMoves.Count > 0)
+            {
+                OnCommandStateChanged?.Invoke();
             }
             return movedUnits;
+        }
+
+        private HashSet<UnitData> GetUnitsPinnedByReadyAttacks(
+            List<AttackEntry> attacks)
+        {
+            var pinnedUnits = new HashSet<UnitData>();
+            if (unitManager == null)
+            {
+                return pinnedUnits;
+            }
+
+            for (int i = 0; i < attacks.Count; i++)
+            {
+                AttackEntry attack = attacks[i];
+                UnitData target =
+                    unitManager.GetUnitById(attack.order.targetUnitId);
+                if (target != null &&
+                    target.IsAlive &&
+                    target.faction != attack.attacker.faction)
+                {
+                    pinnedUnits.Add(target);
+                }
+            }
+
+            return pinnedUnits;
+        }
+
+        private List<AttackEntry> GetReadyAttackEntries()
+        {
+            var attacks = new List<AttackEntry>();
+            if (unitManager == null)
+            {
+                return attacks;
+            }
+
+            int sequence = 0;
+            foreach (UnitData unit in unitManager.Units)
+            {
+                if (unit == null ||
+                    !unit.IsAlive ||
+                    unit.pendingOrders == null ||
+                    unit.pendingOrders.Count == 0)
+                {
+                    continue;
+                }
+
+                Order order = unit.pendingOrders[0];
+                if (order == null ||
+                    order.orderType != OrderType.Attack ||
+                    order.remainingDelayTurns > 0)
+                {
+                    continue;
+                }
+
+                UnitDefinition definition = GetUnitDefinition(unit);
+                attacks.Add(new AttackEntry
+                {
+                    attacker = unit,
+                    order = order,
+                    attackerDefinition = definition,
+                    attackRange = definition != null
+                        ? definition.attackRange
+                        : 0,
+                    sequence = sequence++
+                });
+            }
+
+            attacks.Sort((left, right) =>
+            {
+                int rangeOrder = right.attackRange.CompareTo(left.attackRange);
+                return rangeOrder != 0
+                    ? rangeOrder
+                    : left.sequence.CompareTo(right.sequence);
+            });
+            return attacks;
+        }
+
+        private bool ResolveCombatAndAftermath(
+            HashSet<UnitData> engagedUnits,
+            List<AttackEntry> attacks)
+        {
+            if (unitManager == null)
+            {
+                return false;
+            }
+
+            var resolvedAttacks = new List<ResolvedAttack>();
+            System.Func<string, UnitDefinition> definitionLookup =
+                gameManager != null
+                    ? new System.Func<string, UnitDefinition>(
+                        gameManager.GetUnitDefinition)
+                    : null;
+
+            for (int i = 0; i < attacks.Count; i++)
+            {
+                AttackEntry attack = attacks[i];
+                if (!attack.attacker.IsAlive ||
+                    !IsCurrentOrder(attack.attacker, attack.order))
+                {
+                    continue;
+                }
+
+                UnitData defender =
+                    unitManager.GetUnitById(attack.order.targetUnitId);
+                if (!CombatResolver.CanAttack(
+                        attack.attacker,
+                        defender,
+                        attack.attackerDefinition))
+                {
+                    AddCombatLog(
+                        GetUnitLabel(attack.attacker) +
+                        " の攻撃命令は、対象が不在または射程外のため実行されませんでした。");
+                    RemoveOrder(attack.attacker, attack.order);
+                    continue;
+                }
+
+                int targetX = defender.x;
+                int targetY = defender.y;
+                Faction defenderFaction = defender.faction;
+                UnitDefinition defenderDefinition =
+                    GetUnitDefinition(defender);
+                bool defenderCurrentlyAttacking =
+                    HasReadyAttackOrder(defender, attacks);
+
+                CombatResult result = CombatResolver.ResolveCombat(
+                    attack.attacker,
+                    defender,
+                    attack.attackerDefinition,
+                    defenderDefinition,
+                    mapView != null ? mapView.Grid : null,
+                    unitManager,
+                    definitionLookup,
+                    defenderCurrentlyAttacking);
+
+                engagedUnits.Add(attack.attacker);
+                engagedUnits.Add(defender);
+                resolvedAttacks.Add(new ResolvedAttack
+                {
+                    attacker = attack.attacker,
+                    defenderFaction = defenderFaction,
+                    targetX = targetX,
+                    targetY = targetY
+                });
+                LogCombatResult(attack.attacker, defender, result);
+                RemoveOrder(attack.attacker, attack.order);
+            }
+
+            bool movedUnits = ResolveDestroyedAndRoutedUnits();
+            movedUnits |= AdvanceMeleeAttackers(resolvedAttacks);
+            OnCommandStateChanged?.Invoke();
+            return movedUnits;
+        }
+
+        private void LogCombatResult(
+            UnitData attacker,
+            UnitData defender,
+            CombatResult result)
+        {
+            var modifierNames = new List<string>();
+            if (result.appliedModifiers != null)
+            {
+                for (int i = 0; i < result.appliedModifiers.Count; i++)
+                {
+                    UnitModifier modifier = result.appliedModifiers[i];
+                    if (modifier != null)
+                    {
+                        modifierNames.Add(
+                            string.IsNullOrEmpty(modifier.displayName)
+                                ? modifier.sourceId
+                                : modifier.displayName);
+                    }
+                }
+            }
+
+            string modifierSummary = modifierNames.Count > 0
+                ? " 補正=" + string.Join("、", modifierNames)
+                : string.Empty;
+            AddCombatLog(
+                GetUnitLabel(attacker) +
+                " が " +
+                GetUnitLabel(defender) +
+                " を攻撃。兵員損害=" +
+                result.defenderManpowerDamage +
+                "、組織率損害=" +
+                result.defenderOrganizationDamage +
+                modifierSummary);
+
+            if (result.counterAttackOccurred)
+            {
+                AddCombatLog(
+                    GetUnitLabel(defender) +
+                    " が反撃。攻撃側の兵員損害=" +
+                    result.attackerManpowerDamage +
+                    "、組織率損害=" +
+                    result.attackerOrganizationDamage +
+                    "。");
+            }
+        }
+
+        private bool ResolveDestroyedAndRoutedUnits()
+        {
+            bool movedUnits = false;
+            List<UnitData> units = new List<UnitData>(unitManager.Units);
+
+            for (int i = 0; i < units.Count; i++)
+            {
+                UnitData unit = units[i];
+                if (unit == null || unit.CurrentTotalManpower > 0)
+                {
+                    continue;
+                }
+
+                unitManager.RemoveUnit(unit);
+                AddCombatLog(GetUnitLabel(unit) + " は兵員を失い壊滅しました。");
+            }
+
+            for (int i = 0; i < units.Count; i++)
+            {
+                UnitData unit = units[i];
+                if (unit == null ||
+                    unit.CurrentTotalManpower <= 0 ||
+                    unit.organization > 0 ||
+                    !IsRegisteredUnit(unit))
+                {
+                    continue;
+                }
+
+                Vector2Int retreatCell;
+                if (TryFindRoutDestination(unit, out retreatCell))
+                {
+                    int fromX = unit.x;
+                    int fromY = unit.y;
+                    unit.organization = 250;
+                    bool retreated = unitManager.MoveUnitAlongPath(
+                        unit,
+                        retreatCell.x,
+                        retreatCell.y,
+                        new List<Vector2Int>
+                        {
+                            new Vector2Int(fromX, fromY),
+                            retreatCell
+                        });
+                    if (retreated)
+                    {
+                        if (unit.pendingOrders != null)
+                        {
+                            unit.pendingOrders.Clear();
+                        }
+                        movedUnits = true;
+                        AddCombatLog(
+                            GetUnitLabel(unit) +
+                            " は敗走し、(" +
+                            retreatCell.x +
+                            "," +
+                            retreatCell.y +
+                            ") へ退避しました。");
+                        continue;
+                    }
+                }
+
+                unitManager.RemoveUnit(unit);
+                AddCombatLog(
+                    GetUnitLabel(unit) +
+                    " は退路がなく壊滅しました。");
+            }
+
+            return movedUnits;
+        }
+
+        private bool TryFindRoutDestination(
+            UnitData unit,
+            out Vector2Int destination)
+        {
+            destination = Vector2Int.zero;
+            HexGrid grid = mapView != null ? mapView.Grid : null;
+            if (unit == null || grid == null || unitManager == null)
+            {
+                return false;
+            }
+
+            UnitDefinition definition = GetUnitDefinition(unit);
+            int bestEnemyDistance = int.MinValue;
+            bool foundDestination = false;
+            for (int direction = 0; direction < 6; direction++)
+            {
+                Vector2Int neighbor =
+                    HexUtility.GetNeighborOffset(unit.x, unit.y, direction);
+                if (!grid.IsInBounds(neighbor.x, neighbor.y) ||
+                    HasLivingEnemyAt(neighbor.x, neighbor.y, unit.faction))
+                {
+                    continue;
+                }
+
+                HexCell cell = grid.GetCell(neighbor.x, neighbor.y);
+                TerrainDefinition terrain = cell == null
+                    ? null
+                    : grid.GetTerrainDefinition(cell.terrainId);
+                int moveCost = definition != null
+                    ? definition.GetMoveCost(terrain)
+                    : grid.GetMoveCost(neighbor.x, neighbor.y);
+                if (moveCost < 0)
+                {
+                    continue;
+                }
+
+                int enemyDistance = GetNearestEnemyDistance(
+                    neighbor.x,
+                    neighbor.y,
+                    unit.faction);
+                if (!foundDestination || enemyDistance > bestEnemyDistance)
+                {
+                    destination = neighbor;
+                    bestEnemyDistance = enemyDistance;
+                    foundDestination = true;
+                }
+            }
+
+            return foundDestination;
+        }
+
+        private int GetNearestEnemyDistance(int x, int y, Faction faction)
+        {
+            int nearestDistance = int.MaxValue;
+            bool foundEnemy = false;
+            foreach (UnitData enemy in unitManager.Units)
+            {
+                if (enemy == null || !enemy.IsAlive || enemy.faction == faction)
+                {
+                    continue;
+                }
+
+                int distance = HexUtility.DistanceOffset(
+                    x,
+                    y,
+                    enemy.x,
+                    enemy.y);
+                nearestDistance = Mathf.Min(nearestDistance, distance);
+                foundEnemy = true;
+            }
+
+            return foundEnemy ? nearestDistance : 0;
+        }
+
+        private bool AdvanceMeleeAttackers(List<ResolvedAttack> resolvedAttacks)
+        {
+            bool movedUnits = false;
+            HexGrid grid = mapView != null ? mapView.Grid : null;
+            if (grid == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < resolvedAttacks.Count; i++)
+            {
+                ResolvedAttack attack = resolvedAttacks[i];
+                UnitData attacker = attack.attacker;
+                if (attacker == null || !attacker.IsAlive)
+                {
+                    continue;
+                }
+
+                UnitDefinition definition = GetUnitDefinition(attacker);
+                if (definition == null || definition.attackRange != 1)
+                {
+                    continue;
+                }
+
+                if (HasLivingFactionUnitAt(
+                        attack.targetX,
+                        attack.targetY,
+                        attack.defenderFaction) ||
+                    HasLivingEnemyAt(
+                        attack.targetX,
+                        attack.targetY,
+                        attacker.faction))
+                {
+                    continue;
+                }
+
+                HexCell targetCell = grid.GetCell(
+                    attack.targetX,
+                    attack.targetY);
+                TerrainDefinition terrain = targetCell == null
+                    ? null
+                    : grid.GetTerrainDefinition(targetCell.terrainId);
+                if (definition.GetMoveCost(terrain) < 0)
+                {
+                    continue;
+                }
+
+                if (attacker.x == attack.targetX &&
+                    attacker.y == attack.targetY)
+                {
+                    continue;
+                }
+
+                int fromX = attacker.x;
+                int fromY = attacker.y;
+                if (unitManager.MoveUnitAlongPath(
+                        attacker,
+                        attack.targetX,
+                        attack.targetY,
+                        new List<Vector2Int>
+                        {
+                            new Vector2Int(fromX, fromY),
+                            new Vector2Int(attack.targetX, attack.targetY)
+                        }))
+                {
+                    movedUnits = true;
+                    AddCombatLog(
+                        GetUnitLabel(attacker) +
+                        " が敵陣の空いたマスを占領しました。");
+                }
+            }
+
+            return movedUnits;
+        }
+
+        private void RecoverNonCombatUnits(HashSet<UnitData> engagedUnits)
+        {
+            if (unitManager == null)
+            {
+                return;
+            }
+
+            bool recoveredAny = false;
+            foreach (UnitData unit in unitManager.Units)
+            {
+                if (unit == null ||
+                    !unit.IsAlive ||
+                    engagedUnits.Contains(unit))
+                {
+                    continue;
+                }
+
+                int previousOrganization = unit.organization;
+                unit.organization = Mathf.Min(
+                    unit.maxOrganization,
+                    unit.organization + 150);
+                if (unit.organization > previousOrganization)
+                {
+                    recoveredAny = true;
+                    AddCombatLog(
+                        GetUnitLabel(unit) +
+                        " は組織率を回復しました（+" +
+                        (unit.organization - previousOrganization) +
+                        "）。");
+                }
+            }
+
+            if (recoveredAny)
+            {
+                OnCommandStateChanged?.Invoke();
+            }
+        }
+
+        private MoveProposal SelectMoveWinner(List<MoveProposal> proposals)
+        {
+            int lowestCost = int.MaxValue;
+            int highestMovePoints = int.MinValue;
+            var tiedProposals = new List<MoveProposal>();
+
+            for (int i = 0; i < proposals.Count; i++)
+            {
+                MoveProposal proposal = proposals[i];
+                if (proposal.cumulativeCost < lowestCost ||
+                    (proposal.cumulativeCost == lowestCost &&
+                     proposal.move.movePoints > highestMovePoints))
+                {
+                    lowestCost = proposal.cumulativeCost;
+                    highestMovePoints = proposal.move.movePoints;
+                    tiedProposals.Clear();
+                    tiedProposals.Add(proposal);
+                }
+                else if (proposal.cumulativeCost == lowestCost &&
+                    proposal.move.movePoints == highestMovePoints)
+                {
+                    tiedProposals.Add(proposal);
+                }
+            }
+
+            return tiedProposals[
+                UnityEngine.Random.Range(0, tiedProposals.Count)];
+        }
+
+        private bool HasReadyAttackOrder(
+            UnitData unit,
+            List<AttackEntry> attacks)
+        {
+            if (unit == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < attacks.Count; i++)
+            {
+                AttackEntry attack = attacks[i];
+                if (attack.attacker == unit &&
+                    CombatResolver.CanAttack(
+                        unit,
+                        unitManager.GetUnitById(attack.order.targetUnitId),
+                        attack.attackerDefinition))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private bool HasLivingEnemyAt(int x, int y, Faction faction)
+        {
+            if (unitManager == null)
+            {
+                return false;
+            }
+
+            List<UnitData> occupants = unitManager.GetUnitsAt(x, y);
+            for (int i = 0; i < occupants.Count; i++)
+            {
+                UnitData occupant = occupants[i];
+                if (occupant != null &&
+                    occupant.IsAlive &&
+                    occupant.faction != faction)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private bool HasLivingFactionUnitAt(int x, int y, Faction faction)
+        {
+            List<UnitData> occupants = unitManager.GetUnitsAt(x, y);
+            for (int i = 0; i < occupants.Count; i++)
+            {
+                UnitData occupant = occupants[i];
+                if (occupant != null &&
+                    occupant.IsAlive &&
+                    occupant.faction == faction)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private UnitDefinition GetUnitDefinition(UnitData unit)
+        {
+            return gameManager != null
+                ? gameManager.GetUnitDefinition(GetUnitTypeId(unit))
+                : null;
+        }
+
+        private bool IsRegisteredUnit(UnitData target)
+        {
+            foreach (UnitData unit in unitManager.Units)
+            {
+                if (unit == target)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool IsCurrentOrder(UnitData unit, Order order)
+        {
+            return unit != null &&
+                unit.pendingOrders != null &&
+                unit.pendingOrders.Count > 0 &&
+                object.ReferenceEquals(unit.pendingOrders[0], order);
+        }
+
+        private static void RemoveOrder(UnitData unit, Order order)
+        {
+            if (unit == null || unit.pendingOrders == null || order == null)
+            {
+                return;
+            }
+
+            unit.pendingOrders.Remove(order);
+        }
+
+        private static string GetUnitLabel(UnitData unit)
+        {
+            if (unit == null)
+            {
+                return "不明な部隊";
+            }
+
+            return string.IsNullOrEmpty(unit.unitName)
+                ? unit.unitId
+                : unit.unitName;
+        }
+
+        private void AddCombatLog(string message)
+        {
+            string entry = "第" + turnNumber + "ターン: " + message;
+            combatLog.Add(entry);
+            OnCombatLogUpdated?.Invoke(entry);
         }
 
         private void ResetRemainingMovePoints()
@@ -505,23 +1298,24 @@ namespace EdoStrategy.Core
 
             foreach (UnitData unit in unitManager.Units)
             {
-                if (!unit.IsAlive)
+                if (unit == null || !unit.IsAlive)
                 {
                     continue;
                 }
 
-                UnitDefinition definition =
-                    gameManager != null
-                        ? gameManager.GetUnitDefinition(GetUnitTypeId(unit))
-                        : null;
+                UnitDefinition definition = GetUnitDefinition(unit);
                 unit.remainingMovePoints =
                     definition != null ? definition.movePoints : 0;
-                ClearMoveOrders(unit);
             }
         }
 
         private void CheckVictory()
         {
+            if (unitManager == null || State == BattleState.BattleEnded)
+            {
+                return;
+            }
+
             bool enemyHeadquartersAlive = false;
             bool playerHeadquartersAlive = false;
             bool enemyAlive = false;
@@ -529,15 +1323,12 @@ namespace EdoStrategy.Core
 
             foreach (UnitData unit in unitManager.Units)
             {
-                if (!unit.IsAlive)
+                if (unit == null || !unit.IsAlive)
                 {
                     continue;
                 }
 
-                UnitDefinition definition =
-                    gameManager != null
-                        ? gameManager.GetUnitDefinition(GetUnitTypeId(unit))
-                        : null;
+                UnitDefinition definition = GetUnitDefinition(unit);
                 bool isHeadquarters =
                     definition != null && definition.commandLevel >= 2;
 
@@ -564,12 +1355,16 @@ namespace EdoStrategy.Core
                 Debug.Log("Player victory.");
                 State = BattleState.BattleEnded;
                 OnCommandStateChanged?.Invoke();
+                AddCombatLog("プレイヤー軍の勝利です。");
+                OnBattleEnded?.Invoke(true);
             }
             else if (!playerAlive || !playerHeadquartersAlive)
             {
                 Debug.Log("Player defeat.");
                 State = BattleState.BattleEnded;
                 OnCommandStateChanged?.Invoke();
+                AddCombatLog("プレイヤー軍の敗北です。");
+                OnBattleEnded?.Invoke(false);
             }
         }
 
@@ -819,7 +1614,11 @@ namespace EdoStrategy.Core
                 return false;
             }
 
-            ClearMoveOrders(unit);
+            if (unit.pendingOrders == null)
+            {
+                unit.pendingOrders = new List<Order>();
+            }
+            ClearActionOrders(unit);
             var moveOrder = new Order
             {
                 orderType = OrderType.Move,
@@ -841,9 +1640,30 @@ namespace EdoStrategy.Core
             return true;
         }
 
+        private void ClearActionOrders(UnitData unit)
+        {
+            if (unit == null || unit.pendingOrders == null)
+            {
+                return;
+            }
+
+            for (int i = unit.pendingOrders.Count - 1; i >= 0; i--)
+            {
+                Order order = unit.pendingOrders[i];
+                if (order != null &&
+                    (order.orderType == OrderType.Move ||
+                     order.orderType == OrderType.Attack))
+                {
+                    unit.pendingOrders.RemoveAt(i);
+                }
+            }
+        }
+
         private void HandleCellClick(Vector2 screenPosition)
         {
-            if (mapView == null || battleCamera == null)
+            if (mapView == null ||
+                battleCamera == null ||
+                unitManager == null)
             {
                 return;
             }
@@ -867,20 +1687,42 @@ namespace EdoStrategy.Core
             var playerUnits = new List<UnitData>();
             for (int i = 0; i < clickedUnits.Count; i++)
             {
-                if (clickedUnits[i].faction == Faction.Player)
+                if (clickedUnits[i] != null &&
+                    clickedUnits[i].faction == Faction.Player &&
+                    clickedUnits[i].IsAlive)
                 {
                     playerUnits.Add(clickedUnits[i]);
                 }
             }
-            if (isShiftHeld && playerUnits.Count == 0)
-            {
-                return;
-            }
-
             OnCellUnitsSelected?.Invoke(
                 cellPosition.x,
                 cellPosition.y,
                 clickedUnits);
+
+            UnitData targetEnemy = null;
+            for (int i = 0; i < clickedUnits.Count; i++)
+            {
+                if (clickedUnits[i] != null &&
+                    clickedUnits[i].faction == Faction.Enemy &&
+                    clickedUnits[i].IsAlive)
+                {
+                    targetEnemy = clickedUnits[i];
+                    break;
+                }
+            }
+            if (targetEnemy != null)
+            {
+                if (selectedUnits.Count > 0)
+                {
+                    TryAttackSelectedUnits(targetEnemy);
+                }
+                return;
+            }
+
+            if (isShiftHeld && playerUnits.Count == 0)
+            {
+                return;
+            }
 
             if (playerUnits.Count > 0)
             {
