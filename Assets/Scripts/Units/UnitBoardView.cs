@@ -260,7 +260,7 @@ namespace EdoStrategy.Units
                 lastInputMode ==
                     TurnManager.CommandInputMode.SelectAssaultMoveTarget;
             if (isAssaultMoveClick &&
-                Input.GetMouseButtonDown(0) &&
+                Input.GetMouseButtonDown(1) &&
                 TryGetCursorCell(out Vector2Int clickedCell))
             {
                 pendingAssaultMoveTarget = clickedCell;
@@ -698,7 +698,7 @@ namespace EdoStrategy.Units
                 {
                     AddCellHighlight(
                         cell,
-                        new Color(0.75f, 0.35f, 1f, 0.5f),
+                        new Color(1f, 0.25f, 0.25f, 0.45f),
                         "AmbushTargetHighlight",
                         7,
                         highlightSprite);
@@ -709,13 +709,12 @@ namespace EdoStrategy.Units
                 hasPendingAssaultMoveTarget)
             {
                 HashSet<Vector2Int> assaultCells =
-                    GetAssaultTargetCells(selectedUnits,
-                        pendingAssaultMoveTarget);
+                    GetAssaultTargetCells(pendingAssaultMoveTarget);
                 foreach (Vector2Int cell in assaultCells)
                 {
                     AddCellHighlight(
                         cell,
-                        new Color(1f, 0.35f, 0.12f, 0.55f),
+                        new Color(1f, 0.25f, 0.25f, 0.45f),
                         "AssaultTargetHighlight",
                         7,
                         highlightSprite);
@@ -818,72 +817,35 @@ namespace EdoStrategy.Units
                     continue;
                 }
 
-                UnitDefinition definition = gameManager != null
-                    ? gameManager.GetUnitDefinition(GetUnitTypeId(unit))
-                    : null;
-                int range = definition != null
-                    ? Mathf.Max(1, definition.attackRange)
-                    : 1;
-                for (int y = 0; y < mapView.Grid.Height; y++)
-                {
-                    for (int x = 0; x < mapView.Grid.Width; x++)
-                    {
-                        int distance = HexUtility.DistanceOffset(
-                            unit.x,
-                            unit.y,
-                            x,
-                            y);
-                        if (distance > 0 && distance <= range)
-                        {
-                            cells.Add(new Vector2Int(x, y));
-                        }
-                    }
-                }
+                cells.UnionWith(GetAdjacentCells(
+                    new Vector2Int(unit.x, unit.y)));
             }
             return cells;
         }
 
         private HashSet<Vector2Int> GetAssaultTargetCells(
-            IReadOnlyList<UnitData> attackers,
             Vector2Int moveTarget)
         {
+            return GetAdjacentCells(moveTarget);
+        }
+
+        private HashSet<Vector2Int> GetAdjacentCells(Vector2Int origin)
+        {
             var cells = new HashSet<Vector2Int>();
-            if (unitManager == null || attackers == null)
+            if (mapView == null || mapView.Grid == null)
             {
                 return cells;
             }
 
-            foreach (UnitData enemy in unitManager.Units)
+            for (int direction = 0; direction < 6; direction++)
             {
-                if (enemy == null ||
-                    !enemy.IsAlive ||
-                    enemy.faction != Faction.Enemy)
+                Vector2Int neighbor = HexUtility.GetNeighborOffset(
+                    origin.x,
+                    origin.y,
+                    direction);
+                if (mapView.Grid.IsInBounds(neighbor.x, neighbor.y))
                 {
-                    continue;
-                }
-
-                for (int i = 0; i < attackers.Count; i++)
-                {
-                    UnitData attacker = attackers[i];
-                    if (attacker == null || !attacker.IsAlive)
-                    {
-                        continue;
-                    }
-
-                    UnitDefinition definition = gameManager != null
-                        ? gameManager.GetUnitDefinition(
-                            GetUnitTypeId(attacker))
-                        : null;
-                    if (definition != null &&
-                        HexUtility.DistanceOffset(
-                            moveTarget.x,
-                            moveTarget.y,
-                            enemy.x,
-                            enemy.y) <= definition.attackRange)
-                    {
-                        cells.Add(new Vector2Int(enemy.x, enemy.y));
-                        break;
-                    }
+                    cells.Add(neighbor);
                 }
             }
             return cells;
@@ -1102,12 +1064,12 @@ namespace EdoStrategy.Units
                     new Vector2Int(unit.x, unit.y),
                     target
                 },
-                new Color(0.7f, 0.25f, 1f, 0.95f),
+                new Color(1f, 0.2f, 0.18f, 0.95f),
                 "AmbushWatchArrow",
                 14);
             DrawOrderCellMarker(
                 target,
-                new Color(0.7f, 0.25f, 1f, 0.5f),
+                new Color(1f, 0.25f, 0.25f, 0.45f),
                 "AmbushWatchMarker",
                 10);
         }
