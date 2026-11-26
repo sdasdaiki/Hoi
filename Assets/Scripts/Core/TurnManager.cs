@@ -14,6 +14,20 @@ namespace EdoStrategy.Core
     [DefaultExecutionOrder(-50)]
     public class TurnManager : MonoBehaviour
     {
+        public enum CommandInputMode
+        {
+            Normal,
+            SelectAmbushTarget,
+            SelectAssaultMoveTarget,
+            SelectAssaultAttackTarget
+        }
+
+        private sealed class PendingAssaultMove
+        {
+            public UnitData unit;
+            public List<Vector2Int> path;
+        }
+
         private sealed class PlannedMove
         {
             public UnitData unit;
@@ -75,12 +89,15 @@ namespace EdoStrategy.Core
         private UnitData selectedUnit;
         private readonly List<UnitData> selectedUnits =
             new List<UnitData>();
+        private readonly List<PendingAssaultMove> pendingAssaultMoves =
+            new List<PendingAssaultMove>();
         private readonly List<string> combatLog = new List<string>();
         private int turnNumber = 1;
 
         public event System.Action<bool> OnBattleEnded;
         public event System.Action<string> OnCombatLogUpdated;
         public BattleState State { get; private set; }
+        public CommandInputMode InputMode { get; private set; }
         public int TurnNumber
         {
             get { return turnNumber; }
@@ -129,6 +146,14 @@ namespace EdoStrategy.Core
                 !BattleUI.IsInputFieldFocused())
             {
                 ClearAllOrdersForSelectedUnits();
+                CancelCommandInputMode();
+                return;
+            }
+
+            if (Input.GetMouseButtonDown(1) &&
+                InputMode != CommandInputMode.Normal)
+            {
+                CancelCommandInputMode();
                 return;
             }
 
@@ -157,6 +182,7 @@ namespace EdoStrategy.Core
 
         public void StartBattle()
         {
+            ResetCommandInputMode();
             State = BattleState.PlayerCommandPhase;
             OnCommandStateChanged?.Invoke();
         }
@@ -169,6 +195,7 @@ namespace EdoStrategy.Core
             }
 
             State = BattleState.ExecutionPhase;
+            ResetCommandInputMode();
             selectedUnit = null;
             selectedUnits.Clear();
             OnCommandStateChanged?.Invoke();
@@ -297,10 +324,61 @@ namespace EdoStrategy.Core
 
         private void NotifySelectionChanged()
         {
+            ResetCommandInputMode();
             selectedUnit = selectedUnits.Count > 0
                 ? selectedUnits[0]
                 : null;
             OnCommandStateChanged?.Invoke();
+        }
+
+        public void BeginAmbushOrderMode()
+        {
+            if (State != BattleState.PlayerCommandPhase ||
+                selectedUnits.Count == 0)
+            {
+                return;
+            }
+
+            pendingAssaultMoves.Clear();
+            InputMode = CommandInputMode.SelectAmbushTarget;
+            OnCommandStateChanged?.Invoke();
+        }
+
+        public void BeginAssaultOrderMode()
+        {
+            if (State != BattleState.PlayerCommandPhase ||
+                selectedUnits.Count == 0)
+            {
+                return;
+            }
+
+            pendingAssaultMoves.Clear();
+            InputMode = CommandInputMode.SelectAssaultMoveTarget;
+            OnCommandStateChanged?.Invoke();
+        }
+
+        public void CancelCommandInputMode()
+        {
+            ResetCommandInputMode();
+            OnCommandStateChanged?.Invoke();
+        }
+
+        public bool IssueDefendOrderToSelected()
+        {
+            ResetCommandInputMode();
+            return TryDefendSelectedUnits();
+        }
+
+        public bool IssueEntrenchOrderToSelected()
+        {
+            ResetCommandInputMode();
+            return TryEntrenchSelectedUnits();
+        }
+
+        private void ResetCommandInputMode()
+        {
+            InputMode = CommandInputMode.Normal;
+            pendingAssaultMoves.Clear();
         }
 
         public bool IsUnitSelected(UnitData unit)
@@ -362,12 +440,20 @@ namespace EdoStrategy.Core
             HexGrid grid = mapView != null ? mapView.Grid : null;
             if (grid == null ||
                 !grid.IsInBounds(watchedX, watchedY) ||
-                unit == null ||
-                HexUtility.DistanceOffset(
+                unit == null)
+            {
+                return false;
+            }
+
+            UnitDefinition definition = GetUnitDefinition(unit);
+            int targetRange = definition != null
+                ? Mathf.Max(1, definition.attackRange)
+                : 1;
+            if (HexUtility.DistanceOffset(
                     unit.x,
                     unit.y,
                     watchedX,
-                    watchedY) != 1)
+                    watchedY) > targetRange)
             {
                 return false;
             }
@@ -3369,12 +3455,255 @@ namespace EdoStrategy.Core
             }
         }
 
+        private void HandleCommandInputModeClick(Vector2 screenPosition)
+        {
+            if (InputMode == CommandInputMode.Normal)
+            {
+                return;
+            }
+
+            Vector2Int clickedCell;
+            if (!TryGetClickedCell(screenPosition, out clickedCell))
+            {
+                return;
+            }
+
+            if (InputMode == CommandInputMode.SelectAmbushTarget)
+            {
+                bool issuedAny = false;
+                foreach (UnitData unit in new List<UnitData>(selectedUnits))
+                {
+                    if (IssueAmbushOrder(
+                            unit,
+                            clickedCell.x,
+                            clickedCell.y))
+                    {
+                        issuedAny = true;
+                    }
+                }
+
+                if (issuedAny)
+                {
+                    ResetCommandInputMode();
+                    OnCommandStateChanged?.Invoke();
+                }
+                return;
+            }
+
+            if (InputMode == CommandInputMode.SelectAssaultMoveTarget)
+            {
+                var plannedMoves = new List<PendingAssaultMove>();
+                foreach (UnitData unit in new List<UnitData>(selectedUnits))
+                {
+                    List<Vector2Int> path;
+                    if (TryBuildMovementPath(
+                            unit,
+                            clickedCell.x,
+                            clickedCell.y,
+                            out path))
+                    {
+                        plannedMoves.Add(new PendingAssaultMove
+                        {
+                            unit = unit,
+                            path = path
+                        });
+                    }
+                }
+
+                if (plannedMoves.Count > 0)
+                {
+                    pendingAssaultMoves.Clear();
+                    pendingAssaultMoves.AddRange(plannedMoves);
+                    InputMode = CommandInputMode.SelectAssaultAttackTarget;
+                    OnCommandStateChanged?.Invoke();
+                }
+                return;
+            }
+
+            if (InputMode == CommandInputMode.SelectAssaultAttackTarget)
+            {
+                if (!HasLivingEnemyAt(
+                        clickedCell.x,
+                        clickedCell.y,
+                        Faction.Player))
+                {
+                    return;
+                }
+
+                bool issuedAny = false;
+                foreach (PendingAssaultMove pendingMove
+                    in new List<PendingAssaultMove>(pendingAssaultMoves))
+                {
+                    if (pendingMove == null ||
+                        pendingMove.unit == null ||
+                        !pendingMove.unit.IsAlive ||
+                        !selectedUnits.Contains(pendingMove.unit) ||
+                        pendingMove.path == null ||
+                        pendingMove.path.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    Vector2Int destination =
+                        pendingMove.path[pendingMove.path.Count - 1];
+                    UnitDefinition definition =
+                        GetUnitDefinition(pendingMove.unit);
+                    if (definition == null ||
+                        HexUtility.DistanceOffset(
+                            destination.x,
+                            destination.y,
+                            clickedCell.x,
+                            clickedCell.y) > definition.attackRange)
+                    {
+                        continue;
+                    }
+
+                    if (!IssueAssaultOrder(
+                            pendingMove.unit,
+                            destination.x,
+                            destination.y,
+                            clickedCell.x,
+                            clickedCell.y))
+                    {
+                        continue;
+                    }
+
+                    Order assaultOrder;
+                    if (HasMoveOrder(pendingMove.unit, out assaultOrder))
+                    {
+                        assaultOrder.path = new List<Vector2Int>(
+                            pendingMove.path);
+                    }
+                    issuedAny = true;
+                }
+
+                if (issuedAny)
+                {
+                    ResetCommandInputMode();
+                    OnCommandStateChanged?.Invoke();
+                }
+            }
+        }
+
+        private bool TryGetClickedCell(
+            Vector2 screenPosition,
+            out Vector2Int cellPosition)
+        {
+            cellPosition = Vector2Int.zero;
+            if (mapView == null || battleCamera == null)
+            {
+                return false;
+            }
+
+            Vector3 worldPosition = battleCamera.ScreenToWorldPoint(
+                new Vector3(
+                    screenPosition.x,
+                    screenPosition.y,
+                    battleCamera.nearClipPlane));
+            HexStackCounterView counter = unitBoardView != null
+                ? unitBoardView.GetCounterAtWorldPosition(
+                    new Vector2(worldPosition.x, worldPosition.y))
+                : null;
+            if (counter != null)
+            {
+                cellPosition = new Vector2Int(counter.X, counter.Y);
+                return true;
+            }
+
+            Tilemap tilemap = mapView.GetComponent<Tilemap>();
+            if (tilemap == null)
+            {
+                return false;
+            }
+
+            Vector3Int tileCell = tilemap.WorldToCell(worldPosition);
+            cellPosition = new Vector2Int(tileCell.x, tileCell.y);
+            return mapView.Grid != null &&
+                mapView.Grid.IsInBounds(cellPosition.x, cellPosition.y);
+        }
+
+        private bool TryBuildMovementPath(
+            UnitData unit,
+            int targetX,
+            int targetY,
+            out List<Vector2Int> path)
+        {
+            path = null;
+            HexGrid grid = mapView != null ? mapView.Grid : null;
+            UnitDefinition definition =
+                unit != null ? GetUnitDefinition(unit) : null;
+            if (unit == null ||
+                !unit.IsAlive ||
+                grid == null ||
+                definition == null ||
+                !grid.IsInBounds(targetX, targetY) ||
+                HasLivingEnemyAt(targetX, targetY, unit.faction))
+            {
+                return false;
+            }
+
+            if (unit.x == targetX && unit.y == targetY)
+            {
+                path = new List<Vector2Int>
+                {
+                    new Vector2Int(unit.x, unit.y),
+                    new Vector2Int(unit.x, unit.y)
+                };
+                return true;
+            }
+
+            path = grid.FindPath(
+                unit.x,
+                unit.y,
+                targetX,
+                targetY,
+                unit.faction,
+                definition,
+                unitManager);
+            if (path == null || path.Count < 2)
+            {
+                path = null;
+                return false;
+            }
+
+            int totalMoveCost = 0;
+            for (int i = 1; i < path.Count; i++)
+            {
+                HexCell cell = grid.GetCell(path[i].x, path[i].y);
+                TerrainDefinition terrain = cell == null
+                    ? null
+                    : grid.GetTerrainDefinition(cell.terrainId);
+                int moveCost = definition.GetMoveCost(terrain);
+                if (moveCost < 0)
+                {
+                    path = null;
+                    return false;
+                }
+                totalMoveCost += moveCost;
+            }
+
+            if (definition.movePoints <= 0 ||
+                totalMoveCost > definition.movePoints ||
+                totalMoveCost > unit.remainingMovePoints)
+            {
+                path = null;
+                return false;
+            }
+            return true;
+        }
+
         private void HandleCellSelectionClick(Vector2 screenPosition)
         {
             if (mapView == null ||
                 battleCamera == null ||
                 unitManager == null)
             {
+                return;
+            }
+
+            if (InputMode != CommandInputMode.Normal)
+            {
+                HandleCommandInputModeClick(screenPosition);
                 return;
             }
 
