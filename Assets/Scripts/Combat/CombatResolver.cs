@@ -236,6 +236,50 @@ namespace EdoStrategy.Combat
                 orgDamageMultiplier: 1200);
         }
 
+        public static UnitModifier EvaluateAssaultAttackerModifier()
+        {
+            return CreateModifier(
+                "assault_attack",
+                "Assault",
+                attackMultiplier: 850,
+                defenseMultiplier: 850);
+        }
+
+        public static UnitModifier EvaluateAssaultDefenderModifier()
+        {
+            return CreateModifier(
+                "assault_defense",
+                "Assaulted",
+                defenseMultiplier: 850,
+                orgDamageMultiplier: 1150);
+        }
+
+        public static UnitModifier EvaluateEntrenchModifier()
+        {
+            return CreateModifier(
+                "entrenching",
+                "Entrenching",
+                defenseMultiplier: 750,
+                orgDamageMultiplier: 1250);
+        }
+
+        public static UnitModifier EvaluateAmbushAttackerModifier()
+        {
+            return CreateModifier(
+                "ambush_attack",
+                "Ambush",
+                attackMultiplier: 1500);
+        }
+
+        public static UnitModifier EvaluateAmbushDefenderModifier()
+        {
+            return CreateModifier(
+                "ambush_defense",
+                "Ambushed",
+                defenseMultiplier: 750,
+                orgDamageMultiplier: 1250);
+        }
+
         public static CombatResult ResolveCombat(
             UnitData attacker,
             UnitData defender,
@@ -246,13 +290,55 @@ namespace EdoStrategy.Combat
             Func<string, UnitDefinition> getUnitDef,
             bool isDefenderCurrentlyAttacking)
         {
+            return ResolveCombat(
+                attacker,
+                defender,
+                attackerDef,
+                defenderDef,
+                grid,
+                unitManager,
+                getUnitDef,
+                isDefenderCurrentlyAttacking,
+                null,
+                null,
+                Permille,
+                true,
+                false);
+        }
+
+        public static CombatResult ResolveCombat(
+            UnitData attacker,
+            UnitData defender,
+            UnitDefinition attackerDef,
+            UnitDefinition defenderDef,
+            HexGrid grid,
+            UnitManager unitManager,
+            Func<string, UnitDefinition> getUnitDef,
+            bool isDefenderCurrentlyAttacking,
+            UnitModifier attackerOrderModifier,
+            UnitModifier defenderOrderModifier,
+            int damageMultiplier,
+            bool allowCounterAttack,
+            bool ignoreRange)
+        {
             var result = new CombatResult
             {
                 attackerUnitId = attacker == null ? null : attacker.unitId,
                 defenderUnitId = defender == null ? null : defender.unitId
             };
 
-            if (!CanAttack(attacker, defender, attackerDef))
+            if (!ignoreRange && !CanAttack(attacker, defender, attackerDef))
+            {
+                return result;
+            }
+            if (attacker == null ||
+                defender == null ||
+                attacker.CurrentTotalManpower <= 0 ||
+                attacker.organization <= 0 ||
+                defender.CurrentTotalManpower <= 0 ||
+                defender.organization <= 0 ||
+                attacker.faction == defender.faction ||
+                attackerDef == null)
             {
                 return result;
             }
@@ -276,6 +362,8 @@ namespace EdoStrategy.Combat
             AddModifier(result.appliedModifiers, defenderStackModifier);
             AddModifier(result.appliedModifiers, flankingModifier);
             AddModifier(result.appliedModifiers, exposureModifier);
+            AddModifier(result.appliedModifiers, attackerOrderModifier);
+            AddModifier(result.appliedModifiers, defenderOrderModifier);
 
             int terrainDefenseMultiplier =
                 GetTerrainDefenseMultiplier(grid, defender.x, defender.y);
@@ -294,6 +382,11 @@ namespace EdoStrategy.Combat
                 attackerDef,
                 getUnitDef,
                 attackerStackModifier);
+            attackPower = ScaleByPermille(
+                attackPower,
+                attackerOrderModifier == null
+                    ? Permille
+                    : Math.Max(0, attackerOrderModifier.attackMultiplier));
             int breakthrough = CalculateEffectiveBreakthrough(
                 attacker,
                 attackerDef,
@@ -306,6 +399,11 @@ namespace EdoStrategy.Combat
                 defenderStackModifier,
                 flankingModifier,
                 exposureModifier);
+            defensePower = ScaleByPermille(
+                defensePower,
+                defenderOrderModifier == null
+                    ? Permille
+                    : Math.Max(0, defenderOrderModifier.defenseMultiplier));
             int netDefense = CalculateNetDefense(defensePower, breakthrough);
 
             result.effectiveAttackPower = attackPower;
@@ -320,7 +418,14 @@ namespace EdoStrategy.Combat
                 GetOrganizationDamageMultiplier(
                     defenderStackModifier,
                     flankingModifier,
-                    exposureModifier));
+                    exposureModifier,
+                    defenderOrderModifier));
+            manpowerDamage = ScaleDamageByPermille(
+                manpowerDamage,
+                damageMultiplier);
+            organizationDamage = ScaleDamageByPermille(
+                organizationDamage,
+                damageMultiplier);
 
             result.defenderManpowerDamage =
                 ApplyManpowerDamage(defender, manpowerDamage);
@@ -340,7 +445,8 @@ namespace EdoStrategy.Combat
                 defender,
                 defenderDef,
                 getUnitDef);
-            if (defender.CurrentTotalManpower <= 0 ||
+            if (!allowCounterAttack ||
+                defender.CurrentTotalManpower <= 0 ||
                 defender.organization <= 0 ||
                 counterDefinition == null ||
                 counterAttackRange <= 0 ||
@@ -389,6 +495,11 @@ namespace EdoStrategy.Combat
                 counterDefinition,
                 getUnitDef,
                 counterAttackStackModifier);
+            counterAttackPower = ScaleByPermille(
+                counterAttackPower,
+                defenderOrderModifier == null
+                    ? Permille
+                    : Math.Max(0, defenderOrderModifier.attackMultiplier));
             int counterBreakthrough = CalculateEffectiveBreakthrough(
                 defender,
                 counterDefinition,
@@ -401,21 +512,33 @@ namespace EdoStrategy.Combat
                 counterDefenseStackModifier,
                 counterFlankingModifier,
                 counterExposureModifier);
+            counterDefensePower = ScaleByPermille(
+                counterDefensePower,
+                attackerOrderModifier == null
+                    ? Permille
+                    : Math.Max(0, attackerOrderModifier.defenseMultiplier));
             int counterNetDefense =
                 CalculateNetDefense(counterDefensePower, counterBreakthrough);
 
-            result.attackerManpowerDamage = ApplyManpowerDamage(
-                attacker,
-                CalculateManpowerDamage(counterAttackPower, counterNetDefense));
-            result.attackerOrganizationDamage = ApplyOrganizationDamage(
-                attacker,
+            int counterManpowerDamage = ScaleDamageByPermille(
+                CalculateManpowerDamage(counterAttackPower, counterNetDefense),
+                damageMultiplier);
+            int counterOrganizationDamage = ScaleDamageByPermille(
                 CalculateOrganizationDamage(
                     counterAttackPower,
                     counterNetDefense,
                     GetOrganizationDamageMultiplier(
                         counterDefenseStackModifier,
                         counterFlankingModifier,
-                        counterExposureModifier)));
+                        counterExposureModifier,
+                        attackerOrderModifier)),
+                damageMultiplier);
+            result.attackerManpowerDamage = ApplyManpowerDamage(
+                attacker,
+                counterManpowerDamage);
+            result.attackerOrganizationDamage = ApplyOrganizationDamage(
+                attacker,
+                counterOrganizationDamage);
 
             return result;
         }
@@ -636,9 +759,15 @@ namespace EdoStrategy.Combat
             TerrainDefinition terrain = cell == null
                 ? null
                 : grid.GetTerrainDefinition(cell.terrainId);
-            return terrain == null
+            int terrainMultiplier = terrain == null
                 ? Permille
                 : Math.Max(0, terrain.defenseMultiplier);
+            int fortificationLevel = cell == null
+                ? 0
+                : Math.Max(0, Math.Min(5, cell.fortificationLevel));
+            return ScaleByPermille(
+                terrainMultiplier,
+                Permille + fortificationLevel * 100);
         }
 
         private static int CalculateNetDefense(int defense, int breakthrough)
@@ -671,7 +800,8 @@ namespace EdoStrategy.Combat
         private static int GetOrganizationDamageMultiplier(
             UnitModifier stackModifier,
             UnitModifier flankingModifier,
-            UnitModifier exposureModifier)
+            UnitModifier exposureModifier,
+            UnitModifier orderModifier)
         {
             int multiplier = Permille;
             multiplier = ScaleByPermille(
@@ -689,6 +819,11 @@ namespace EdoStrategy.Combat
                 exposureModifier == null
                     ? Permille
                     : Math.Max(0, exposureModifier.orgDamageMultiplier));
+            multiplier = ScaleByPermille(
+                multiplier,
+                orderModifier == null
+                    ? Permille
+                    : Math.Max(0, orderModifier.orgDamageMultiplier));
             return multiplier;
         }
 
@@ -822,6 +957,16 @@ namespace EdoStrategy.Combat
             }
 
             return ClampToInt((long)value * multiplier / Permille);
+        }
+
+        private static int ScaleDamageByPermille(int damage, int multiplier)
+        {
+            if (damage <= 0 || multiplier <= 0)
+            {
+                return 0;
+            }
+
+            return Math.Max(1, ScaleByPermille(damage, multiplier));
         }
 
         private static int ScaleRatioByPermilleToInt(

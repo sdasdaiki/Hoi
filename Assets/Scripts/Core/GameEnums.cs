@@ -12,7 +12,11 @@ namespace EdoStrategy.Core
     public enum OrderType
     {
         Move = 0,
-        Attack = 1
+        Attack = 1,
+        Assault = 2,
+        Defend = 3,
+        Entrench = 4,
+        Ambush = 5
     }
 
     public enum BattleState

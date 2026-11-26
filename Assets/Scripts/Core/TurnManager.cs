@@ -36,6 +36,8 @@ namespace EdoStrategy.Core
             public Vector2Int destination;
             public int stepCost;
             public int cumulativeCost;
+            public int remainingCost;
+            public int nearestHeadquartersDistance;
         }
 
         private sealed class AttackEntry
@@ -50,6 +52,8 @@ namespace EdoStrategy.Core
         private sealed class ResolvedAttack
         {
             public UnitData attacker;
+            public int attackerX;
+            public int attackerY;
             public Faction defenderFaction;
             public int targetX;
             public int targetY;
@@ -279,9 +283,13 @@ namespace EdoStrategy.Core
             for (int i = 0; i < selectedUnits.Count; i++)
             {
                 UnitData unit = selectedUnits[i];
-                if (unit != null && unit.pendingOrders != null)
+                if (unit != null)
                 {
-                    unit.pendingOrders.Clear();
+                    if (unit.pendingOrders != null)
+                    {
+                        unit.pendingOrders.Clear();
+                    }
+                    unit.isAmbushed = false;
                 }
             }
             OnCommandStateChanged?.Invoke();
@@ -336,6 +344,215 @@ namespace EdoStrategy.Core
             return TryMoveUnit(unit, targetX, targetY, definition);
         }
 
+        public bool IssueDefendOrder(UnitData unit)
+        {
+            return IssueStationaryOrder(unit, OrderType.Defend, -1, -1);
+        }
+
+        public bool IssueEntrenchOrder(UnitData unit)
+        {
+            return IssueStationaryOrder(unit, OrderType.Entrench, -1, -1);
+        }
+
+        public bool IssueAmbushOrder(
+            UnitData unit,
+            int watchedX,
+            int watchedY)
+        {
+            HexGrid grid = mapView != null ? mapView.Grid : null;
+            if (grid == null ||
+                !grid.IsInBounds(watchedX, watchedY) ||
+                unit == null ||
+                HexUtility.DistanceOffset(
+                    unit.x,
+                    unit.y,
+                    watchedX,
+                    watchedY) != 1)
+            {
+                return false;
+            }
+
+            return IssueStationaryOrder(
+                unit,
+                OrderType.Ambush,
+                watchedX,
+                watchedY);
+        }
+
+        public bool IssueAssaultOrder(
+            UnitData unit,
+            int moveTargetX,
+            int moveTargetY,
+            int assaultTargetX,
+            int assaultTargetY)
+        {
+            if (unit == null ||
+                State != BattleState.PlayerCommandPhase ||
+                !unit.IsAlive ||
+                unit.faction != Faction.Player ||
+                !HasLivingEnemyAt(
+                    assaultTargetX,
+                    assaultTargetY,
+                    unit.faction))
+            {
+                return false;
+            }
+
+            UnitDefinition definition = GetUnitDefinition(unit);
+            int range = definition != null ? definition.attackRange : 0;
+            if (range <= 0 ||
+                HexUtility.DistanceOffset(
+                    moveTargetX,
+                    moveTargetY,
+                    assaultTargetX,
+                    assaultTargetY) > range)
+            {
+                return false;
+            }
+
+            bool isAlreadyAtTarget =
+                unit.x == moveTargetX && unit.y == moveTargetY;
+            if (isAlreadyAtTarget)
+            {
+                ClearActionOrders(unit);
+                if (unit.pendingOrders == null)
+                {
+                    unit.pendingOrders = new List<Order>();
+                }
+                var stationaryAssault = new Order
+                {
+                    orderType = OrderType.Assault,
+                    targetX = moveTargetX,
+                    targetY = moveTargetY,
+                    secondaryTargetX = assaultTargetX,
+                    secondaryTargetY = assaultTargetY,
+                    remainingDelayTurns = 0
+                };
+                stationaryAssault.path.Add(
+                    new Vector2Int(unit.x, unit.y));
+                stationaryAssault.path.Add(
+                    new Vector2Int(unit.x, unit.y));
+                unit.pendingOrders.Add(stationaryAssault);
+                OnCommandStateChanged?.Invoke();
+                return true;
+            }
+
+            if (!TryMoveUnit(unit, moveTargetX, moveTargetY, definition))
+            {
+                return false;
+            }
+
+            Order order;
+            if (!HasMoveOrder(unit, out order))
+            {
+                return false;
+            }
+
+            order.orderType = OrderType.Assault;
+            order.secondaryTargetX = assaultTargetX;
+            order.secondaryTargetY = assaultTargetY;
+            OnCommandStateChanged?.Invoke();
+            return true;
+        }
+
+        public bool TryDefendSelectedUnits()
+        {
+            return IssueStationaryOrderForSelection(OrderType.Defend, -1, -1);
+        }
+
+        public bool TryEntrenchSelectedUnits()
+        {
+            return IssueStationaryOrderForSelection(OrderType.Entrench, -1, -1);
+        }
+
+        public bool TryAmbushSelectedUnits(int watchedX, int watchedY)
+        {
+            bool issued = false;
+            foreach (UnitData unit in new List<UnitData>(selectedUnits))
+            {
+                if (IssueAmbushOrder(unit, watchedX, watchedY))
+                {
+                    issued = true;
+                }
+            }
+            return issued;
+        }
+
+        public bool TryAssaultSelectedUnits(
+            int moveTargetX,
+            int moveTargetY,
+            int assaultTargetX,
+            int assaultTargetY)
+        {
+            bool issued = false;
+            foreach (UnitData unit in new List<UnitData>(selectedUnits))
+            {
+                if (IssueAssaultOrder(
+                        unit,
+                        moveTargetX,
+                        moveTargetY,
+                        assaultTargetX,
+                        assaultTargetY))
+                {
+                    issued = true;
+                }
+            }
+            return issued;
+        }
+
+        private bool IssueStationaryOrder(
+            UnitData unit,
+            OrderType orderType,
+            int secondaryTargetX,
+            int secondaryTargetY)
+        {
+            if (unit == null ||
+                State != BattleState.PlayerCommandPhase ||
+                !unit.IsAlive ||
+                unit.faction != Faction.Player)
+            {
+                return false;
+            }
+
+            ClearActionOrders(unit);
+            if (unit.pendingOrders == null)
+            {
+                unit.pendingOrders = new List<Order>();
+            }
+            unit.isAmbushed = orderType == OrderType.Ambush;
+            unit.pendingOrders.Add(new Order
+            {
+                orderType = orderType,
+                targetX = unit.x,
+                targetY = unit.y,
+                secondaryTargetX = secondaryTargetX,
+                secondaryTargetY = secondaryTargetY,
+                remainingDelayTurns = 0
+            });
+            OnCommandStateChanged?.Invoke();
+            return true;
+        }
+
+        private bool IssueStationaryOrderForSelection(
+            OrderType orderType,
+            int secondaryTargetX,
+            int secondaryTargetY)
+        {
+            bool issued = false;
+            foreach (UnitData unit in new List<UnitData>(selectedUnits))
+            {
+                if (IssueStationaryOrder(
+                        unit,
+                        orderType,
+                        secondaryTargetX,
+                        secondaryTargetY))
+                {
+                    issued = true;
+                }
+            }
+            return issued;
+        }
+
         public bool TryAttackSelectedUnits(UnitData target)
         {
             if (State != BattleState.PlayerCommandPhase ||
@@ -366,6 +583,7 @@ namespace EdoStrategy.Core
                     attacker.pendingOrders = new List<Order>();
                 }
                 attacker.pendingOrders.Clear();
+                attacker.isAmbushed = false;
                 attacker.pendingOrders.Add(new Order
                 {
                     orderType = OrderType.Attack,
@@ -398,6 +616,10 @@ namespace EdoStrategy.Core
                 if (order != null && order.orderType == orderType)
                 {
                     unit.pendingOrders.RemoveAt(i);
+                    if (orderType == OrderType.Ambush)
+                    {
+                        unit.isAmbushed = false;
+                    }
                     removed = true;
                 }
             }
@@ -449,8 +671,17 @@ namespace EdoStrategy.Core
         {
             yield return null;
 
+            AdvancePendingOrderDelays();
             List<AttackEntry> readyAttacks = GetReadyAttackEntries();
-            bool movedUnits = ExecutePlannedMoves(readyAttacks);
+            var engagedUnits = new HashSet<UnitData>();
+            var pinnedUnits = new HashSet<UnitData>();
+            var retreatOrigins = new Dictionary<UnitData, Vector2Int>();
+
+            bool movedUnits = ResolveFirstCombatPhase(
+                readyAttacks,
+                engagedUnits,
+                pinnedUnits,
+                retreatOrigins);
             if (movedUnits)
             {
                 if (unitBoardView != null &&
@@ -468,12 +699,11 @@ namespace EdoStrategy.Core
             }
             yield return null;
 
-            var engagedUnits = new HashSet<UnitData>();
-            bool combatMovedUnits =
-                ResolveCombatAndAftermath(engagedUnits, readyAttacks);
-            RecoverNonCombatUnits(engagedUnits);
-
-            if (combatMovedUnits)
+            bool movementOccurred = ExecuteMovementSteps(
+                pinnedUnits,
+                engagedUnits,
+                retreatOrigins);
+            if (movementOccurred)
             {
                 if (unitBoardView != null &&
                     unitBoardView.IsAnimatingUnits)
@@ -490,6 +720,28 @@ namespace EdoStrategy.Core
             }
             yield return null;
 
+            bool assaultMovedUnits = ResolveAssaultAttacks(
+                engagedUnits,
+                retreatOrigins);
+            if (assaultMovedUnits)
+            {
+                if (unitBoardView != null &&
+                    unitBoardView.IsAnimatingUnits)
+                {
+                    while (unitBoardView.IsAnimatingUnits)
+                    {
+                        yield return null;
+                    }
+                }
+                else
+                {
+                    yield return new WaitForSeconds(0.35f);
+                }
+            }
+
+            CompleteEntrenchmentsAndOrders(engagedUnits);
+            RecoverNonCombatUnits(engagedUnits);
+
             State = BattleState.ReconAndReportPhase;
             yield return null;
 
@@ -504,6 +756,1316 @@ namespace EdoStrategy.Core
             turnNumber++;
             ResetRemainingMovePoints();
             State = BattleState.PlayerCommandPhase;
+            OnCommandStateChanged?.Invoke();
+        }
+
+        private void AdvancePendingOrderDelays()
+        {
+            if (unitManager == null)
+            {
+                return;
+            }
+
+            foreach (UnitData unit in unitManager.Units)
+            {
+                if (unit == null ||
+                    !unit.IsAlive ||
+                    unit.pendingOrders == null ||
+                    unit.pendingOrders.Count == 0)
+                {
+                    continue;
+                }
+
+                Order order = unit.pendingOrders[0];
+                if (order == null)
+                {
+                    continue;
+                }
+
+                if (order.remainingDelayTurns > 0)
+                {
+                    order.remainingDelayTurns--;
+                }
+                if (order.orderType == OrderType.Ambush &&
+                    order.remainingDelayTurns <= 0)
+                {
+                    unit.isAmbushed = true;
+                }
+            }
+        }
+
+        private bool ResolveFirstCombatPhase(
+            List<AttackEntry> attacks,
+            HashSet<UnitData> engagedUnits,
+            HashSet<UnitData> pinnedUnits,
+            Dictionary<UnitData, Vector2Int> retreatOrigins)
+        {
+            if (unitManager == null)
+            {
+                return false;
+            }
+
+            var resolvedAttacks = new List<ResolvedAttack>();
+            System.Func<string, UnitDefinition> definitionLookup =
+                gameManager != null
+                    ? new System.Func<string, UnitDefinition>(
+                        gameManager.GetUnitDefinition)
+                    : null;
+
+            for (int i = 0; i < attacks.Count; i++)
+            {
+                AttackEntry attack = attacks[i];
+                if (attack.attacker == null ||
+                    !attack.attacker.IsAlive ||
+                    !IsCurrentOrder(attack.attacker, attack.order))
+                {
+                    continue;
+                }
+
+                UnitData target =
+                    unitManager.GetUnitById(attack.order.targetUnitId);
+                int targetX = target != null
+                    ? target.x
+                    : attack.order.targetX;
+                int targetY = target != null
+                    ? target.y
+                    : attack.order.targetY;
+                List<UnitData> defenders = GetAttackDefenders(
+                    targetX,
+                    targetY,
+                    attack.attacker.faction);
+                if (defenders.Count == 0)
+                {
+                    AddCombatLog(
+                        GetUnitLabel(attack.attacker) +
+                        " の攻撃命令は、対象マスに敵がいないため不発となりました。");
+                    RemoveOrder(attack.attacker, attack.order);
+                    continue;
+                }
+
+                bool hasStationaryDefender = false;
+                for (int j = 0; j < defenders.Count; j++)
+                {
+                    if (IsStationaryDefenseUnit(defenders[j]))
+                    {
+                        hasStationaryDefender = true;
+                        break;
+                    }
+                }
+
+                if (hasStationaryDefender)
+                {
+                    defenders.RemoveAll(defender =>
+                        !IsStationaryDefenseUnit(defender));
+                }
+                else
+                {
+                    for (int j = 0; j < defenders.Count; j++)
+                    {
+                        pinnedUnits.Add(defenders[j]);
+                    }
+                }
+
+                UnitData defender = SelectCombatDefender(defenders);
+                if (defender == null ||
+                    !CombatResolver.CanAttack(
+                        attack.attacker,
+                        defender,
+                        attack.attackerDefinition))
+                {
+                    AddCombatLog(
+                        GetUnitLabel(attack.attacker) +
+                        " の攻撃命令は、対象が射程外のため実行されませんでした。");
+                    RemoveOrder(attack.attacker, attack.order);
+                    continue;
+                }
+
+                int combatX = defender.x;
+                int combatY = defender.y;
+                int attackerX = attack.attacker.x;
+                int attackerY = attack.attacker.y;
+                Faction defenderFaction = defender.faction;
+                UnitDefinition defenderDefinition =
+                    GetUnitDefinition(defender);
+                bool defenderCurrentlyAttacking =
+                    HasReadyAttackOrder(defender, attacks);
+                UnitModifier defenderModifier =
+                    GetDefenderOrderModifier(defender);
+                CombatResult result = CombatResolver.ResolveCombat(
+                    attack.attacker,
+                    defender,
+                    attack.attackerDefinition,
+                    defenderDefinition,
+                    mapView != null ? mapView.Grid : null,
+                    unitManager,
+                    definitionLookup,
+                    defenderCurrentlyAttacking,
+                    null,
+                    defenderModifier,
+                    1000,
+                    true,
+                    false);
+
+                engagedUnits.Add(attack.attacker);
+                engagedUnits.Add(defender);
+                if (defender.isAmbushed)
+                {
+                    defender.isAmbushed = false;
+                }
+                resolvedAttacks.Add(new ResolvedAttack
+                {
+                    attacker = attack.attacker,
+                    attackerX = attackerX,
+                    attackerY = attackerY,
+                    defenderFaction = defenderFaction,
+                    targetX = combatX,
+                    targetY = combatY
+                });
+                LogCombatResult(attack.attacker, defender, result);
+                RemoveOrder(attack.attacker, attack.order);
+            }
+
+            bool movedUnits = ResolveDestroyedAndRoutedUnits(retreatOrigins);
+            movedUnits |= AdvanceMeleeAttackers(resolvedAttacks);
+            OnCommandStateChanged?.Invoke();
+            return movedUnits;
+        }
+
+        private List<UnitData> GetAttackDefenders(
+            int x,
+            int y,
+            Faction attackerFaction)
+        {
+            var defenders = new List<UnitData>();
+            if (unitManager == null)
+            {
+                return defenders;
+            }
+
+            List<UnitData> occupants = unitManager.GetUnitsAt(x, y);
+            for (int i = 0; i < occupants.Count; i++)
+            {
+                UnitData unit = occupants[i];
+                if (unit != null &&
+                    unit.IsAlive &&
+                    unit.faction != attackerFaction)
+                {
+                    defenders.Add(unit);
+                }
+            }
+            return defenders;
+        }
+
+        private static bool IsStationaryDefenseUnit(UnitData unit)
+        {
+            if (unit == null ||
+                unit.pendingOrders == null ||
+                unit.pendingOrders.Count == 0 ||
+                unit.pendingOrders[0] == null)
+            {
+                return true;
+            }
+
+            OrderType orderType = unit.pendingOrders[0].orderType;
+            return orderType == OrderType.Defend ||
+                orderType == OrderType.Entrench ||
+                orderType == OrderType.Ambush;
+        }
+
+        private UnitData SelectCombatDefender(List<UnitData> defenders)
+        {
+            UnitData selected = null;
+            int highestOrganization = int.MinValue;
+            int highestDefense = int.MinValue;
+            for (int i = 0; i < defenders.Count; i++)
+            {
+                UnitData candidate = defenders[i];
+                if (candidate == null || !candidate.IsAlive)
+                {
+                    continue;
+                }
+
+                UnitDefinition definition = GetUnitDefinition(candidate);
+                int defense = definition != null
+                    ? definition.baseDefense
+                    : 0;
+                if (selected == null ||
+                    candidate.organization > highestOrganization ||
+                    candidate.organization == highestOrganization &&
+                    defense > highestDefense)
+                {
+                    selected = candidate;
+                    highestOrganization = candidate.organization;
+                    highestDefense = defense;
+                }
+            }
+            return selected;
+        }
+
+        private UnitModifier GetDefenderOrderModifier(UnitData unit)
+        {
+            if (unit == null ||
+                unit.pendingOrders == null ||
+                unit.pendingOrders.Count == 0 ||
+                unit.pendingOrders[0] == null)
+            {
+                return null;
+            }
+
+            switch (unit.pendingOrders[0].orderType)
+            {
+                case OrderType.Entrench:
+                    return CombatResolver.EvaluateEntrenchModifier();
+                case OrderType.Ambush:
+                    return CombatResolver.EvaluateAmbushDefenderModifier();
+                default:
+                    return null;
+            }
+        }
+
+        private bool ExecuteMovementSteps(
+            HashSet<UnitData> pinnedUnits,
+            HashSet<UnitData> engagedUnits,
+            Dictionary<UnitData, Vector2Int> retreatOrigins)
+        {
+            if (unitManager == null)
+            {
+                return false;
+            }
+
+            var plannedMoves = new List<PlannedMove>();
+            foreach (UnitData unit in new List<UnitData>(unitManager.Units))
+            {
+                Order order;
+                if (unit == null ||
+                    !unit.IsAlive ||
+                    !HasReadyMovementOrder(unit, out order))
+                {
+                    continue;
+                }
+
+                if (pinnedUnits.Contains(unit))
+                {
+                    AddCombatLog(
+                        GetUnitLabel(unit) +
+                        " は攻撃対象として釘付けとなり、移動を見送りました。");
+                    RemoveOrder(unit, order);
+                    continue;
+                }
+
+                List<Vector2Int> path = order.path;
+                if (path == null ||
+                    path.Count < 2 ||
+                    path[0].x != unit.x ||
+                    path[0].y != unit.y)
+                {
+                    RemoveOrder(unit, order);
+                    continue;
+                }
+
+                UnitDefinition definition = GetUnitDefinition(unit);
+                plannedMoves.Add(new PlannedMove
+                {
+                    unit = unit,
+                    order = order,
+                    definition = definition,
+                    path = new List<Vector2Int>(path),
+                    traversedPath = new List<Vector2Int>
+                    {
+                        new Vector2Int(unit.x, unit.y)
+                    },
+                    movePoints = definition != null
+                        ? definition.movePoints
+                        : 0,
+                    startX = unit.x,
+                    startY = unit.y
+                });
+            }
+
+            HexGrid grid = mapView != null ? mapView.Grid : null;
+            bool movedUnits = false;
+            if (grid != null)
+            {
+                while (true)
+                {
+                    var proposals = new List<MoveProposal>();
+                    for (int i = 0; i < plannedMoves.Count; i++)
+                    {
+                        PlannedMove move = plannedMoves[i];
+                        if (move.stopped ||
+                            !move.unit.IsAlive ||
+                            move.nextPathIndex >= move.path.Count)
+                        {
+                            move.stopped = true;
+                            continue;
+                        }
+
+                        Vector2Int next = move.path[move.nextPathIndex];
+                        if (!grid.IsInBounds(next.x, next.y))
+                        {
+                            move.stopped = true;
+                            continue;
+                        }
+
+                        HexCell cell = grid.GetCell(next.x, next.y);
+                        TerrainDefinition terrain = cell == null
+                            ? null
+                            : grid.GetTerrainDefinition(cell.terrainId);
+                        int stepCost =
+                            next.x == move.unit.x &&
+                            next.y == move.unit.y
+                                ? 0
+                                : move.definition != null
+                                    ? move.definition.GetMoveCost(terrain)
+                                    : grid.GetMoveCost(next.x, next.y);
+                        if (stepCost < 0 ||
+                            move.consumedMoveCost + stepCost >
+                                move.unit.remainingMovePoints)
+                        {
+                            move.stopped = true;
+                            continue;
+                        }
+
+                        proposals.Add(new MoveProposal
+                        {
+                            move = move,
+                            destination = next,
+                            stepCost = stepCost,
+                            cumulativeCost =
+                                move.consumedMoveCost + stepCost,
+                            remainingCost = CalculateRemainingMoveCost(
+                                move,
+                                move.nextPathIndex),
+                            nearestHeadquartersDistance =
+                                GetNearestHeadquartersDistance(
+                                    move.unit.x,
+                                    move.unit.y,
+                                    move.unit.faction)
+                        });
+                    }
+
+                    if (proposals.Count == 0)
+                    {
+                        break;
+                    }
+
+                    StopMovesBlockedByStationaryEnemies(proposals);
+                    bool ambushTriggered = ResolveAmbushes(
+                        proposals,
+                        engagedUnits,
+                        retreatOrigins);
+                    var accepted = new HashSet<MoveProposal>();
+                    var conflicted = new HashSet<MoveProposal>();
+
+                    var sameCellGroups =
+                        new Dictionary<Vector2Int, List<MoveProposal>>();
+                    for (int i = 0; i < proposals.Count; i++)
+                    {
+                        MoveProposal proposal = proposals[i];
+                        if (proposal.move.stopped ||
+                            !proposal.move.unit.IsAlive)
+                        {
+                            continue;
+                        }
+
+                        List<MoveProposal> group;
+                        if (!sameCellGroups.TryGetValue(
+                                proposal.destination,
+                                out group))
+                        {
+                            group = new List<MoveProposal>();
+                            sameCellGroups.Add(proposal.destination, group);
+                        }
+                        group.Add(proposal);
+                    }
+
+                    foreach (KeyValuePair<Vector2Int, List<MoveProposal>> entry
+                        in sameCellGroups)
+                    {
+                        if (!HasDifferentFactions(entry.Value))
+                        {
+                            continue;
+                        }
+
+                        MoveProposal priorityWinner =
+                            SelectMoveWinnerByPriority(entry.Value);
+                        Faction winningFaction = ResolveBookingEncounter(
+                            entry.Value,
+                            priorityWinner.move.unit.faction,
+                            engagedUnits,
+                            retreatOrigins);
+                        for (int i = 0; i < entry.Value.Count; i++)
+                        {
+                            MoveProposal participant = entry.Value[i];
+                            conflicted.Add(participant);
+                            if (participant.move.unit.faction ==
+                                    winningFaction &&
+                                participant.move.unit.IsAlive &&
+                                participant.move.unit.organization > 0)
+                            {
+                                accepted.Add(participant);
+                            }
+                            else
+                            {
+                                participant.move.stopped = true;
+                            }
+                        }
+                    }
+
+                    for (int i = 0; i < proposals.Count; i++)
+                    {
+                        MoveProposal first = proposals[i];
+                        if (conflicted.Contains(first) ||
+                            first.move.stopped ||
+                            !first.move.unit.IsAlive)
+                        {
+                            continue;
+                        }
+
+                        for (int j = i + 1; j < proposals.Count; j++)
+                        {
+                            MoveProposal second = proposals[j];
+                            if (conflicted.Contains(second) ||
+                                second.move.stopped ||
+                                !second.move.unit.IsAlive ||
+                                first.move.unit.faction ==
+                                    second.move.unit.faction)
+                            {
+                                continue;
+                            }
+
+                            bool headOnSwap =
+                                first.destination.x == second.move.unit.x &&
+                                first.destination.y == second.move.unit.y &&
+                                second.destination.x == first.move.unit.x &&
+                                second.destination.y == first.move.unit.y;
+                            if (!headOnSwap)
+                            {
+                                continue;
+                            }
+
+                            var conflict = new List<MoveProposal>
+                            {
+                                first,
+                                second
+                            };
+                            MoveProposal priorityWinner =
+                                SelectMoveWinnerByPriority(conflict);
+                            Faction winningFaction = ResolveBookingEncounter(
+                                conflict,
+                                priorityWinner.move.unit.faction,
+                                engagedUnits,
+                                retreatOrigins);
+                            conflicted.Add(first);
+                            conflicted.Add(second);
+                            MoveProposal winner =
+                                first.move.unit.faction == winningFaction
+                                    ? first
+                                    : second;
+                            MoveProposal loser =
+                                winner == first ? second : first;
+                            loser.move.stopped = true;
+                            EvacuateHeadOnLoser(
+                                loser,
+                                winner.destination,
+                                retreatOrigins);
+                            if (winner.move.unit.IsAlive &&
+                                winner.move.unit.organization > 0)
+                            {
+                                accepted.Add(winner);
+                            }
+                            break;
+                        }
+                    }
+
+                    var proposalsByCell =
+                        new Dictionary<Vector2Int, List<MoveProposal>>();
+                    for (int i = 0; i < proposals.Count; i++)
+                    {
+                        MoveProposal proposal = proposals[i];
+                        if (conflicted.Contains(proposal) ||
+                            proposal.move.stopped ||
+                            !proposal.move.unit.IsAlive)
+                        {
+                            continue;
+                        }
+
+                        List<UnitData> occupants = unitManager.GetUnitsAt(
+                            proposal.destination.x,
+                            proposal.destination.y);
+                        bool blockedByEnemy = false;
+                        for (int j = 0; j < occupants.Count; j++)
+                        {
+                            UnitData occupant = occupants[j];
+                            if (occupant != null &&
+                                occupant.IsAlive &&
+                                occupant.faction !=
+                                    proposal.move.unit.faction)
+                            {
+                                blockedByEnemy = true;
+                                break;
+                            }
+                        }
+                        if (blockedByEnemy)
+                        {
+                            proposal.move.stopped = true;
+                            continue;
+                        }
+
+                        List<MoveProposal> cellProposals;
+                        if (!proposalsByCell.TryGetValue(
+                                proposal.destination,
+                                out cellProposals))
+                        {
+                            cellProposals = new List<MoveProposal>();
+                            proposalsByCell.Add(
+                                proposal.destination,
+                                cellProposals);
+                        }
+                        cellProposals.Add(proposal);
+                    }
+
+                    foreach (KeyValuePair<Vector2Int, List<MoveProposal>> entry
+                        in proposalsByCell)
+                    {
+                        bool mixedFactions = HasDifferentFactions(
+                            entry.Value);
+                        if (!mixedFactions)
+                        {
+                            for (int i = 0; i < entry.Value.Count; i++)
+                            {
+                                accepted.Add(entry.Value[i]);
+                            }
+                            continue;
+                        }
+
+                        MoveProposal priorityWinner =
+                            SelectMoveWinnerByPriority(entry.Value);
+                        Faction winningFaction = ResolveBookingEncounter(
+                            entry.Value,
+                            priorityWinner.move.unit.faction,
+                            engagedUnits,
+                            retreatOrigins);
+                        for (int i = 0; i < entry.Value.Count; i++)
+                        {
+                            MoveProposal proposal = entry.Value[i];
+                            if (proposal.move.unit.faction == winningFaction &&
+                                proposal.move.unit.IsAlive &&
+                                proposal.move.unit.organization > 0)
+                            {
+                                accepted.Add(proposal);
+                            }
+                            else
+                            {
+                                proposal.move.stopped = true;
+                            }
+                        }
+                    }
+
+                    bool movedThisStep = false;
+                    foreach (MoveProposal proposal in accepted)
+                    {
+                        PlannedMove move = proposal.move;
+                        if (!move.unit.IsAlive || move.stopped)
+                        {
+                            continue;
+                        }
+
+                        Vector2Int previous = new Vector2Int(
+                            move.unit.x,
+                            move.unit.y);
+                        move.unit.x = proposal.destination.x;
+                        move.unit.y = proposal.destination.y;
+                        retreatOrigins[move.unit] = previous;
+                        move.consumedMoveCost += proposal.stepCost;
+                        move.nextPathIndex++;
+                        move.traversedPath.Add(proposal.destination);
+                        move.moved = true;
+                        movedThisStep = true;
+                        movedUnits = true;
+                    }
+
+                    bool routed = ResolveDestroyedAndRoutedUnits(
+                        retreatOrigins);
+                    movedUnits |= routed;
+                    if (!movedThisStep)
+                    {
+                        break;
+                    }
+
+                    if (ambushTriggered)
+                    {
+                        OnCommandStateChanged?.Invoke();
+                    }
+                }
+            }
+
+            for (int i = 0; i < plannedMoves.Count; i++)
+            {
+                PlannedMove move = plannedMoves[i];
+                if (move.moved && IsRegisteredUnit(move.unit))
+                {
+                    int targetX = move.unit.x;
+                    int targetY = move.unit.y;
+                    move.unit.x = move.startX;
+                    move.unit.y = move.startY;
+                    if (!unitManager.MoveUnitAlongPath(
+                            move.unit,
+                            targetX,
+                            targetY,
+                            move.traversedPath))
+                    {
+                        move.unit.x = targetX;
+                        move.unit.y = targetY;
+                        unitManager.NotifyUnitMoved(move.unit);
+                    }
+                    move.unit.remainingMovePoints = Mathf.Max(
+                        0,
+                        move.unit.remainingMovePoints -
+                            move.consumedMoveCost);
+                }
+
+                if (move.unit.pendingOrders != null &&
+                    move.order != null &&
+                    move.order.orderType == OrderType.Move)
+                {
+                    RemoveOrder(move.unit, move.order);
+                }
+            }
+
+            if (plannedMoves.Count > 0)
+            {
+                OnCommandStateChanged?.Invoke();
+            }
+            return movedUnits;
+        }
+
+        private void StopMovesBlockedByStationaryEnemies(
+            List<MoveProposal> proposals)
+        {
+            for (int i = 0; i < proposals.Count; i++)
+            {
+                MoveProposal proposal = proposals[i];
+                List<UnitData> occupants = unitManager.GetUnitsAt(
+                    proposal.destination.x,
+                    proposal.destination.y);
+                bool blocked = false;
+                for (int j = 0; j < occupants.Count; j++)
+                {
+                    UnitData occupant = occupants[j];
+                    if (occupant == null ||
+                        !occupant.IsAlive ||
+                        occupant.faction == proposal.move.unit.faction)
+                    {
+                        continue;
+                    }
+
+                    bool swapping = false;
+                    for (int k = 0; k < proposals.Count; k++)
+                    {
+                        MoveProposal opposingMove = proposals[k];
+                        if (opposingMove.move.unit == occupant &&
+                            opposingMove.destination.x == proposal.move.unit.x &&
+                            opposingMove.destination.y == proposal.move.unit.y)
+                        {
+                            swapping = true;
+                            break;
+                        }
+                    }
+                    if (!swapping)
+                    {
+                        blocked = true;
+                        break;
+                    }
+                }
+
+                if (blocked)
+                {
+                    proposal.move.stopped = true;
+                }
+            }
+        }
+
+        private bool ResolveAmbushes(
+            List<MoveProposal> proposals,
+            HashSet<UnitData> engagedUnits,
+            Dictionary<UnitData, Vector2Int> retreatOrigins)
+        {
+            bool triggered = false;
+            System.Func<string, UnitDefinition> definitionLookup =
+                gameManager != null
+                    ? new System.Func<string, UnitDefinition>(
+                        gameManager.GetUnitDefinition)
+                    : null;
+            for (int i = 0; i < proposals.Count; i++)
+            {
+                MoveProposal proposal = proposals[i];
+                if (proposal.move.stopped ||
+                    !proposal.move.unit.IsAlive)
+                {
+                    continue;
+                }
+
+                foreach (UnitData watcher in unitManager.Units)
+                {
+                    if (watcher == null ||
+                        !watcher.IsAlive ||
+                        !watcher.isAmbushed ||
+                        watcher.faction == proposal.move.unit.faction ||
+                        watcher.pendingOrders == null ||
+                        watcher.pendingOrders.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    Order ambushOrder = watcher.pendingOrders[0];
+                    if (ambushOrder == null ||
+                        ambushOrder.orderType != OrderType.Ambush ||
+                        ambushOrder.remainingDelayTurns > 0 ||
+                        ambushOrder.secondaryTargetX !=
+                            proposal.destination.x ||
+                        ambushOrder.secondaryTargetY !=
+                            proposal.destination.y)
+                    {
+                        continue;
+                    }
+
+                    UnitDefinition ambusherDefinition =
+                        GetUnitDefinition(watcher);
+                    UnitDefinition targetDefinition =
+                        GetUnitDefinition(proposal.move.unit);
+                    if (ambusherDefinition == null ||
+                        targetDefinition == null)
+                    {
+                        Debug.LogWarning(
+                            "伏兵戦闘を解決できません。部隊兵科の定義が見つかりません。");
+                        proposal.move.stopped = true;
+                        triggered = true;
+                        break;
+                    }
+
+                    CombatResult result = CombatResolver.ResolveCombat(
+                        watcher,
+                        proposal.move.unit,
+                        ambusherDefinition,
+                        targetDefinition,
+                        mapView != null ? mapView.Grid : null,
+                        unitManager,
+                        definitionLookup,
+                        false,
+                        CombatResolver.EvaluateAmbushAttackerModifier(),
+                        CombatResolver.EvaluateAmbushDefenderModifier(),
+                        1000,
+                        false,
+                        true);
+                    engagedUnits.Add(watcher);
+                    engagedUnits.Add(proposal.move.unit);
+                    watcher.isAmbushed = false;
+                    RemoveOrder(watcher, ambushOrder);
+                    proposal.move.stopped = true;
+                    retreatOrigins[proposal.move.unit] = new Vector2Int(
+                        proposal.move.unit.x,
+                        proposal.move.unit.y);
+                    LogCombatResult(
+                        watcher,
+                        proposal.move.unit,
+                        result);
+                    AddCombatLog(
+                        GetUnitLabel(proposal.move.unit) +
+                        " は伏兵に遭遇し、移動を停止しました。");
+                    triggered = true;
+                    break;
+                }
+            }
+            return triggered;
+        }
+
+        private Faction ResolveBookingEncounter(
+            List<MoveProposal> participants,
+            Faction priorityFaction,
+            HashSet<UnitData> engagedUnits,
+            Dictionary<UnitData, Vector2Int> retreatOrigins)
+        {
+            MoveProposal first = SelectMoveWinnerByPriority(participants);
+            MoveProposal second = null;
+            for (int i = 0; i < participants.Count; i++)
+            {
+                if (participants[i].move.unit.faction !=
+                    first.move.unit.faction &&
+                    (second == null ||
+                     IsHigherMovePriority(participants[i], second)))
+                {
+                    second = participants[i];
+                }
+            }
+
+            if (second == null)
+            {
+                return first.move.unit.faction;
+            }
+
+            MoveProposal attackerProposal =
+                first.move.unit.faction == priorityFaction ? first : second;
+            MoveProposal defenderProposal =
+                attackerProposal == first ? second : first;
+            UnitData attacker = attackerProposal.move.unit;
+            UnitData defender = defenderProposal.move.unit;
+            UnitDefinition attackerDefinition = GetUnitDefinition(attacker);
+            UnitDefinition defenderDefinition = GetUnitDefinition(defender);
+            if (attackerDefinition == null || defenderDefinition == null)
+            {
+                Debug.LogWarning(
+                    "遭遇戦を解決できません。部隊兵科の定義が見つかりません。");
+                return priorityFaction;
+            }
+
+            CombatResult result = CombatResolver.ResolveCombat(
+                attacker,
+                defender,
+                attackerDefinition,
+                defenderDefinition,
+                mapView != null ? mapView.Grid : null,
+                unitManager,
+                gameManager != null
+                    ? new System.Func<string, UnitDefinition>(
+                        gameManager.GetUnitDefinition)
+                    : null,
+                false,
+                null,
+                null,
+                500,
+                true,
+                true);
+            engagedUnits.Add(attacker);
+            engagedUnits.Add(defender);
+            retreatOrigins[attacker] = new Vector2Int(attacker.x, attacker.y);
+            retreatOrigins[defender] = new Vector2Int(defender.x, defender.y);
+            LogCombatResult(attacker, defender, result);
+            if (!result.counterAttackOccurred &&
+                defender.IsAlive &&
+                attacker.IsAlive)
+            {
+                CombatResult returnResult = CombatResolver.ResolveCombat(
+                    defender,
+                    attacker,
+                    defenderDefinition,
+                    attackerDefinition,
+                    mapView != null ? mapView.Grid : null,
+                    unitManager,
+                    gameManager != null
+                        ? new System.Func<string, UnitDefinition>(
+                            gameManager.GetUnitDefinition)
+                        : null,
+                    false,
+                    null,
+                    null,
+                    500,
+                    false,
+                    true);
+                LogCombatResult(defender, attacker, returnResult);
+            }
+
+            int firstFactionManpower = 0;
+            int secondFactionManpower = 0;
+            for (int i = 0; i < participants.Count; i++)
+            {
+                UnitData unit = participants[i].move.unit;
+                if (unit == null || !unit.IsAlive)
+                {
+                    continue;
+                }
+
+                if (unit.faction == first.move.unit.faction)
+                {
+                    firstFactionManpower += unit.CurrentTotalManpower;
+                }
+                else
+                {
+                    secondFactionManpower += unit.CurrentTotalManpower;
+                }
+            }
+
+            if (firstFactionManpower == secondFactionManpower)
+            {
+                AddCombatLog("遭遇戦は兵力同数のため、優先順位側が進入します。");
+                return priorityFaction;
+            }
+            return firstFactionManpower > secondFactionManpower
+                ? first.move.unit.faction
+                : second.move.unit.faction;
+        }
+
+        private void EvacuateHeadOnLoser(
+            MoveProposal loser,
+            Vector2Int winnerDestination,
+            Dictionary<UnitData, Vector2Int> retreatOrigins)
+        {
+            UnitData unit = loser.move.unit;
+            Vector2Int source = new Vector2Int(unit.x, unit.y);
+            if (TryFindSafeAdjacentCell(
+                    unit,
+                    source,
+                    winnerDestination,
+                    out Vector2Int safeCell))
+            {
+                unit.x = safeCell.x;
+                unit.y = safeCell.y;
+                retreatOrigins[unit] = safeCell;
+                loser.move.traversedPath.Add(safeCell);
+                loser.move.moved = true;
+            }
+            else
+            {
+                unitManager.RemoveUnit(unit);
+                AddCombatLog(
+                    GetUnitLabel(unit) +
+                    " は正面衝突で退路を失い壊滅しました。");
+            }
+        }
+
+        private bool TryFindSafeAdjacentCell(
+            UnitData unit,
+            Vector2Int firstCenter,
+            Vector2Int secondCenter,
+            out Vector2Int destination)
+        {
+            destination = Vector2Int.zero;
+            HexGrid grid = mapView != null ? mapView.Grid : null;
+            if (grid == null || unit == null)
+            {
+                return false;
+            }
+
+            var candidates = new List<Vector2Int>();
+            for (int centerIndex = 0; centerIndex < 2; centerIndex++)
+            {
+                Vector2Int center = centerIndex == 0
+                    ? firstCenter
+                    : secondCenter;
+                for (int direction = 0; direction < 6; direction++)
+                {
+                    Vector2Int candidate =
+                        HexUtility.GetNeighborOffset(
+                            center.x,
+                            center.y,
+                            direction);
+                    if (grid.IsInBounds(candidate.x, candidate.y) &&
+                        candidate != secondCenter &&
+                        !candidates.Contains(candidate))
+                    {
+                        candidates.Add(candidate);
+                    }
+                }
+            }
+
+            var safeCandidates = new List<Vector2Int>();
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                Vector2Int candidate = candidates[i];
+                if (HasLivingEnemyAt(
+                        candidate.x,
+                        candidate.y,
+                        unit.faction) ||
+                    grid.GetMoveCost(candidate.x, candidate.y) < 0)
+                {
+                    continue;
+                }
+
+                safeCandidates.Add(candidate);
+            }
+            if (safeCandidates.Count > 0)
+            {
+                destination = safeCandidates[
+                    UnityEngine.Random.Range(0, safeCandidates.Count)];
+                return true;
+            }
+            return false;
+        }
+
+        private int CalculateRemainingMoveCost(
+            PlannedMove move,
+            int nextPathIndex)
+        {
+            int remainingCost = 0;
+            HexGrid grid = mapView != null ? mapView.Grid : null;
+            for (int i = nextPathIndex + 1; i < move.path.Count; i++)
+            {
+                Vector2Int cellPosition = move.path[i];
+                HexCell cell = grid != null
+                    ? grid.GetCell(cellPosition.x, cellPosition.y)
+                    : null;
+                TerrainDefinition terrain = cell == null || grid == null
+                    ? null
+                    : grid.GetTerrainDefinition(cell.terrainId);
+                int cost = move.definition != null
+                    ? move.definition.GetMoveCost(terrain)
+                    : grid != null
+                        ? grid.GetMoveCost(cellPosition.x, cellPosition.y)
+                        : -1;
+                if (cost < 0)
+                {
+                    return int.MaxValue;
+                }
+                remainingCost += cost;
+            }
+            return remainingCost;
+        }
+
+        private MoveProposal SelectMoveWinnerByPriority(
+            List<MoveProposal> proposals)
+        {
+            MoveProposal winner = proposals[0];
+            for (int i = 1; i < proposals.Count; i++)
+            {
+                if (IsHigherMovePriority(proposals[i], winner))
+                {
+                    winner = proposals[i];
+                }
+                else if (!IsHigherMovePriority(winner, proposals[i]) &&
+                         UnityEngine.Random.Range(0, 2) == 0)
+                {
+                    winner = proposals[i];
+                }
+            }
+            return winner;
+        }
+
+        private static bool IsHigherMovePriority(
+            MoveProposal left,
+            MoveProposal right)
+        {
+            if (left.remainingCost != right.remainingCost)
+            {
+                return left.remainingCost < right.remainingCost;
+            }
+            if (left.move.movePoints != right.move.movePoints)
+            {
+                return left.move.movePoints > right.move.movePoints;
+            }
+            return left.nearestHeadquartersDistance <
+                right.nearestHeadquartersDistance;
+        }
+
+        private int GetNearestHeadquartersDistance(
+            int x,
+            int y,
+            Faction faction)
+        {
+            int nearest = int.MaxValue;
+            if (unitManager == null)
+            {
+                return nearest;
+            }
+
+            foreach (UnitData unit in unitManager.Units)
+            {
+                if (unit == null || !unit.IsAlive || unit.faction != faction)
+                {
+                    continue;
+                }
+
+                UnitDefinition definition = GetUnitDefinition(unit);
+                if (definition == null || definition.commandLevel < 1)
+                {
+                    continue;
+                }
+
+                nearest = Mathf.Min(
+                    nearest,
+                    HexUtility.DistanceOffset(x, y, unit.x, unit.y));
+            }
+            return nearest;
+        }
+
+        private bool HasReadyMovementOrder(UnitData unit, out Order order)
+        {
+            order = null;
+            if (unit == null ||
+                unit.pendingOrders == null ||
+                unit.pendingOrders.Count == 0)
+            {
+                return false;
+            }
+
+            Order current = unit.pendingOrders[0];
+            if (current == null ||
+                (current.orderType != OrderType.Move &&
+                 current.orderType != OrderType.Assault) ||
+                current.remainingDelayTurns > 0)
+            {
+                return false;
+            }
+
+            order = current;
+            return true;
+        }
+
+        private bool ResolveAssaultAttacks(
+            HashSet<UnitData> engagedUnits,
+            Dictionary<UnitData, Vector2Int> retreatOrigins)
+        {
+            if (unitManager == null)
+            {
+                return false;
+            }
+
+            var attackers = new List<UnitData>(unitManager.Units);
+            System.Func<string, UnitDefinition> definitionLookup =
+                gameManager != null
+                    ? new System.Func<string, UnitDefinition>(
+                        gameManager.GetUnitDefinition)
+                    : null;
+
+            for (int i = 0; i < attackers.Count; i++)
+            {
+                UnitData attacker = attackers[i];
+                if (attacker == null ||
+                    !attacker.IsAlive ||
+                    attacker.pendingOrders == null ||
+                    attacker.pendingOrders.Count == 0)
+                {
+                    continue;
+                }
+
+                Order order = attacker.pendingOrders[0];
+                if (order == null ||
+                    order.orderType != OrderType.Assault ||
+                    order.remainingDelayTurns > 0)
+                {
+                    continue;
+                }
+
+                List<UnitData> defenders = GetAttackDefenders(
+                    order.secondaryTargetX,
+                    order.secondaryTargetY,
+                    attacker.faction);
+                UnitData defender = SelectCombatDefender(defenders);
+                UnitDefinition attackerDefinition =
+                    GetUnitDefinition(attacker);
+                if (defender == null ||
+                    attackerDefinition == null ||
+                    HexUtility.DistanceOffset(
+                        attacker.x,
+                        attacker.y,
+                        defender.x,
+                        defender.y) > attackerDefinition.attackRange)
+                {
+                    AddCombatLog(
+                        GetUnitLabel(attacker) +
+                        " の急襲は対象不在または射程外のため不発となりました。");
+                    RemoveOrder(attacker, order);
+                    continue;
+                }
+
+                UnitModifier defenderModifier =
+                    CombineDefenderOrderModifiers(
+                        CombatResolver.EvaluateAssaultDefenderModifier(),
+                        GetDefenderOrderModifier(defender));
+                CombatResult result = CombatResolver.ResolveCombat(
+                    attacker,
+                    defender,
+                    attackerDefinition,
+                    GetUnitDefinition(defender),
+                    mapView != null ? mapView.Grid : null,
+                    unitManager,
+                    definitionLookup,
+                    false,
+                    CombatResolver.EvaluateAssaultAttackerModifier(),
+                    defenderModifier,
+                    1000,
+                    true,
+                    false);
+
+                engagedUnits.Add(attacker);
+                engagedUnits.Add(defender);
+                if (defender.isAmbushed)
+                {
+                    defender.isAmbushed = false;
+                }
+                LogCombatResult(attacker, defender, result);
+                RemoveOrder(attacker, order);
+            }
+
+            bool movedUnits = ResolveDestroyedAndRoutedUnits(retreatOrigins);
+            OnCommandStateChanged?.Invoke();
+            return movedUnits;
+        }
+
+        private static UnitModifier CombineDefenderOrderModifiers(
+            UnitModifier first,
+            UnitModifier second)
+        {
+            if (first == null)
+            {
+                return second;
+            }
+            if (second == null)
+            {
+                return first;
+            }
+
+            return new UnitModifier
+            {
+                sourceId = first.sourceId + "+" + second.sourceId,
+                displayName = first.displayName + " + " + second.displayName,
+                attackMultiplier = (int)((long)first.attackMultiplier *
+                    second.attackMultiplier / 1000),
+                defenseMultiplier = (int)((long)first.defenseMultiplier *
+                    second.defenseMultiplier / 1000),
+                orgDamageMultiplier = (int)((long)first.orgDamageMultiplier *
+                    second.orgDamageMultiplier / 1000)
+            };
+        }
+
+        private void CompleteEntrenchmentsAndOrders(
+            HashSet<UnitData> engagedUnits)
+        {
+            if (unitManager == null)
+            {
+                return;
+            }
+
+            HexGrid grid = mapView != null ? mapView.Grid : null;
+            foreach (UnitData unit in unitManager.Units)
+            {
+                if (unit == null)
+                {
+                    continue;
+                }
+
+                if (unit.IsAlive &&
+                    !engagedUnits.Contains(unit) &&
+                    unit.pendingOrders != null &&
+                    unit.pendingOrders.Count > 0 &&
+                    unit.pendingOrders[0] != null &&
+                    unit.pendingOrders[0].orderType == OrderType.Entrench &&
+                    grid != null)
+                {
+                    HexCell cell = grid.GetCell(unit.x, unit.y);
+                    if (cell != null)
+                    {
+                        cell.fortificationLevel = Mathf.Min(
+                            5,
+                            cell.fortificationLevel + 1);
+                        AddCombatLog(
+                            GetUnitLabel(unit) +
+                            " は塹壕を構築しました（陣地レベル=" +
+                            cell.fortificationLevel +
+                            "）。");
+                    }
+                }
+
+                unit.isAmbushed = false;
+                if (unit.pendingOrders != null &&
+                    unit.pendingOrders.Count > 0 &&
+                    unit.pendingOrders[0] != null &&
+                    (unit.pendingOrders[0].orderType == OrderType.Defend ||
+                     unit.pendingOrders[0].orderType == OrderType.Entrench ||
+                     unit.pendingOrders[0].orderType == OrderType.Ambush))
+                {
+                    unit.pendingOrders.RemoveAt(0);
+                }
+            }
             OnCommandStateChanged?.Invoke();
         }
 
@@ -957,7 +2519,8 @@ namespace EdoStrategy.Core
             }
         }
 
-        private bool ResolveDestroyedAndRoutedUnits()
+        private bool ResolveDestroyedAndRoutedUnits(
+            Dictionary<UnitData, Vector2Int> retreatOrigins = null)
         {
             bool movedUnits = false;
             List<UnitData> units = new List<UnitData>(unitManager.Units);
@@ -986,7 +2549,26 @@ namespace EdoStrategy.Core
                 }
 
                 Vector2Int retreatCell;
-                if (TryFindRoutDestination(unit, out retreatCell))
+                bool hasRetreatCell = false;
+                Vector2Int previousCell;
+                if (retreatOrigins != null &&
+                    retreatOrigins.TryGetValue(unit, out previousCell))
+                {
+                    if (TryFindSafeRoutDestination(
+                            unit,
+                            previousCell,
+                            out retreatCell))
+                    {
+                        hasRetreatCell = true;
+                    }
+                }
+                else
+                {
+                    hasRetreatCell =
+                        TryFindRoutDestination(unit, out retreatCell);
+                }
+
+                if (hasRetreatCell)
                 {
                     int fromX = unit.x;
                     int fromY = unit.y;
@@ -1025,6 +2607,48 @@ namespace EdoStrategy.Core
             }
 
             return movedUnits;
+        }
+
+        private bool TryFindSafeRoutDestination(
+            UnitData unit,
+            Vector2Int preferredCell,
+            out Vector2Int destination)
+        {
+            destination = Vector2Int.zero;
+            HexGrid grid = mapView != null ? mapView.Grid : null;
+            if (unit == null || grid == null)
+            {
+                return false;
+            }
+
+            if (IsSafeRoutCell(unit, preferredCell, grid))
+            {
+                destination = preferredCell;
+                return true;
+            }
+
+            return TryFindSafeAdjacentCell(
+                unit,
+                preferredCell,
+                new Vector2Int(unit.x, unit.y),
+                out destination);
+        }
+
+        private bool IsSafeRoutCell(
+            UnitData unit,
+            Vector2Int cellPosition,
+            HexGrid grid)
+        {
+            if (!grid.IsInBounds(cellPosition.x, cellPosition.y) ||
+                HasLivingEnemyAt(
+                    cellPosition.x,
+                    cellPosition.y,
+                    unit.faction))
+            {
+                return false;
+            }
+
+            return grid.GetMoveCost(cellPosition.x, cellPosition.y) >= 0;
         }
 
         private bool TryFindRoutDestination(
@@ -1114,7 +2738,10 @@ namespace EdoStrategy.Core
             {
                 ResolvedAttack attack = resolvedAttacks[i];
                 UnitData attacker = attack.attacker;
-                if (attacker == null || !attacker.IsAlive)
+                if (attacker == null ||
+                    !attacker.IsAlive ||
+                    attacker.x != attack.attackerX ||
+                    attacker.y != attack.attackerY)
                 {
                     continue;
                 }
@@ -1731,10 +3358,12 @@ namespace EdoStrategy.Core
             for (int i = unit.pendingOrders.Count - 1; i >= 0; i--)
             {
                 Order order = unit.pendingOrders[i];
-                if (order != null &&
-                    (order.orderType == OrderType.Move ||
-                     order.orderType == OrderType.Attack))
+                if (order != null)
                 {
+                    if (order.orderType == OrderType.Ambush)
+                    {
+                        unit.isAmbushed = false;
+                    }
                     unit.pendingOrders.RemoveAt(i);
                 }
             }
@@ -1898,7 +3527,9 @@ namespace EdoStrategy.Core
             }
 
             Order order = unit.pendingOrders[0];
-            if (order != null && order.orderType == OrderType.Move)
+            if (order != null &&
+                (order.orderType == OrderType.Move ||
+                 order.orderType == OrderType.Assault))
             {
                 moveOrder = order;
                 return true;
@@ -1916,7 +3547,9 @@ namespace EdoStrategy.Core
             for (int i = unit.pendingOrders.Count - 1; i >= 0; i--)
             {
                 Order order = unit.pendingOrders[i];
-                if (order != null && order.orderType == OrderType.Move)
+                if (order != null &&
+                    (order.orderType == OrderType.Move ||
+                     order.orderType == OrderType.Assault))
                 {
                     unit.pendingOrders.RemoveAt(i);
                 }

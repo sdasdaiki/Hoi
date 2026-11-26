@@ -21,6 +21,7 @@ namespace EdoStrategy.Units
         public int maxOrganization = 1000;
         public int supplyStatus = 1000;
         public int remainingMovePoints;
+        public bool isAmbushed = false;
 
         public List<Order> pendingOrders = new List<Order>();
 

@@ -11,6 +11,7 @@ namespace EdoStrategy.Map
         public int deployZoneFaction = 0;
         public int infrastructureLevel = 1;
         public int currentSupply = 1000;
+        public int fortificationLevel = 0;
 
         [NonSerialized] public bool isVisibleToPlayer;
 
