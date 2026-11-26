@@ -30,7 +30,10 @@ namespace EdoStrategy.UI
         private TextMeshProUGUI commandGuideLabel;
         private Button cancelCommandInputButton;
         private GameObject combatLogPanel;
+        private RectTransform combatLogPanelRect;
         private TextMeshProUGUI combatLogLabel;
+        private Button exitGameButton;
+        private bool combatLogExpanded;
         private GameObject battleResultPanel;
         private TextMeshProUGUI battleResultLabel;
         private readonly List<string> combatLogLines =
@@ -88,6 +91,12 @@ namespace EdoStrategy.UI
                 statusPanel != null)
             {
                 statusPanel.SetActive(!statusPanel.activeSelf);
+            }
+            if (Input.GetKeyDown(KeyCode.Escape) &&
+                !IsInputFieldFocused() &&
+                combatLogPanel != null)
+            {
+                SetCombatLogExpanded(!combatLogExpanded);
             }
             if (turnManager == null)
             {
@@ -537,6 +546,7 @@ namespace EdoStrategy.UI
                 new Vector2(460f, 190f));
             panelRect.pivot = Vector2.zero;
             combatLogPanel = panelRect.gameObject;
+            combatLogPanelRect = panelRect;
             Image background = combatLogPanel.AddComponent<Image>();
             background.sprite = GetUiRectangleSprite();
             background.color = new Color(0f, 0f, 0f, 0.78f);
@@ -575,6 +585,23 @@ namespace EdoStrategy.UI
             combatLogLabel.alignment = TextAlignmentOptions.BottomLeft;
             combatLogLabel.enableWordWrapping = true;
             combatLogLabel.raycastTarget = false;
+
+            exitGameButton = CreatePanelButton(
+                "Exit Game",
+                "ゲーム終了",
+                panelRect,
+                font,
+                new Vector2(-16f, -16f),
+                new Vector2(160f, 46f),
+                OnExitGame);
+            RectTransform exitButtonRect =
+                exitGameButton.GetComponent<RectTransform>();
+            exitButtonRect.anchorMin = Vector2.one;
+            exitButtonRect.anchorMax = Vector2.one;
+            exitButtonRect.pivot = Vector2.one;
+            exitButtonRect.anchoredPosition = new Vector2(-16f, -16f);
+            exitGameButton.gameObject.SetActive(false);
+            SetCombatLogExpanded(false);
             RefreshCombatLogText();
         }
 
@@ -655,15 +682,15 @@ namespace EdoStrategy.UI
             {
                 case TurnManager.CommandInputMode.SelectAmbushTarget:
                     commandGuideLabel.text =
-                        "伏兵: 監視するマスを左クリックしてください";
+                        "伏兵: 右クリックで監視するマスを指定してください";
                     break;
                 case TurnManager.CommandInputMode.SelectAssaultMoveTarget:
                     commandGuideLabel.text =
-                        "急襲: 先に移動するマスを左クリックしてください";
+                        "急襲: 右クリックで先に移動するマスを指定してください";
                     break;
                 case TurnManager.CommandInputMode.SelectAssaultAttackTarget:
                     commandGuideLabel.text =
-                        "急襲: 移動後に攻撃する敵マスを左クリックしてください";
+                        "急襲: 右クリックで移動後に攻撃する敵マスを指定してください";
                     break;
                 default:
                     commandGuideLabel.text =
@@ -679,9 +706,74 @@ namespace EdoStrategy.UI
                 return;
             }
 
-            combatLogLabel.text = combatLogLines.Count == 0
-                ? "戦闘記録はありません"
-                : string.Join("\n", combatLogLines);
+            if (combatLogLines.Count == 0)
+            {
+                combatLogLabel.text = "戦闘記録はありません";
+                return;
+            }
+
+            int visibleLineCount = combatLogExpanded ? 25 : 5;
+            int firstLine = Mathf.Max(
+                0,
+                combatLogLines.Count - visibleLineCount);
+            var visibleLines = new List<string>(
+                combatLogLines.Count - firstLine);
+            for (int i = firstLine; i < combatLogLines.Count; i++)
+            {
+                visibleLines.Add(combatLogLines[i]);
+            }
+            combatLogLabel.text = string.Join("\n", visibleLines);
+        }
+
+        private void SetCombatLogExpanded(bool expanded)
+        {
+            if (combatLogPanelRect == null)
+            {
+                return;
+            }
+
+            combatLogExpanded = expanded;
+            if (expanded)
+            {
+                combatLogPanelRect.anchorMin = new Vector2(0.5f, 0.5f);
+                combatLogPanelRect.anchorMax = new Vector2(0.5f, 0.5f);
+                combatLogPanelRect.pivot = new Vector2(0.5f, 0.5f);
+                combatLogPanelRect.anchoredPosition = Vector2.zero;
+                combatLogPanelRect.sizeDelta =
+                    new Vector2(1500f, 900f);
+                Image background =
+                    combatLogPanel.GetComponent<Image>();
+                if (background != null)
+                {
+                    background.color = new Color(0f, 0f, 0f, 0.94f);
+                }
+                combatLogLabel.fontSize = 21f;
+                combatLogLabel.alignment = TextAlignmentOptions.TopLeft;
+            }
+            else
+            {
+                combatLogPanelRect.anchorMin = Vector2.zero;
+                combatLogPanelRect.anchorMax = Vector2.zero;
+                combatLogPanelRect.pivot = Vector2.zero;
+                combatLogPanelRect.anchoredPosition =
+                    new Vector2(16f, 16f);
+                combatLogPanelRect.sizeDelta =
+                    new Vector2(460f, 190f);
+                Image background =
+                    combatLogPanel.GetComponent<Image>();
+                if (background != null)
+                {
+                    background.color = new Color(0f, 0f, 0f, 0.78f);
+                }
+                combatLogLabel.fontSize = 16f;
+                combatLogLabel.alignment = TextAlignmentOptions.BottomLeft;
+            }
+
+            if (exitGameButton != null)
+            {
+                exitGameButton.gameObject.SetActive(expanded);
+            }
+            RefreshCombatLogText();
         }
 
         private void ShowUnitsAtCell(
@@ -1003,7 +1095,7 @@ namespace EdoStrategy.UI
                 combatLogLines.Clear();
                 IReadOnlyList<string> existingLog =
                     subscribedTurnManager.CombatLog;
-                int firstLine = Mathf.Max(0, existingLog.Count - 5);
+                int firstLine = Mathf.Max(0, existingLog.Count - 25);
                 for (int i = firstLine; i < existingLog.Count; i++)
                 {
                     combatLogLines.Add(existingLog[i]);
@@ -1020,7 +1112,7 @@ namespace EdoStrategy.UI
             }
 
             combatLogLines.Add(entry);
-            while (combatLogLines.Count > 5)
+            while (combatLogLines.Count > 25)
             {
                 combatLogLines.RemoveAt(0);
             }
@@ -1368,6 +1460,15 @@ namespace EdoStrategy.UI
         {
             Scene activeScene = SceneManager.GetActiveScene();
             SceneManager.LoadScene(activeScene.name);
+        }
+
+        private void OnExitGame()
+        {
+#if UNITY_EDITOR
+            UnityEditor.EditorApplication.isPlaying = false;
+#else
+            Application.Quit();
+#endif
         }
 
         private static void EnsureEventSystem()
