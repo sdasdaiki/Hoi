@@ -19,6 +19,11 @@ namespace EdoStrategy.Units
         private TextMeshPro label;
         private TextMeshPro stackCount;
 
+        public IReadOnlyList<UnitData> Units { get; private set; }
+        public Faction Faction { get; private set; }
+        public int X { get; private set; }
+        public int Y { get; private set; }
+
         public void Initialize(
             IReadOnlyList<UnitData> units,
             UnitDefinition definition,
@@ -33,8 +38,20 @@ namespace EdoStrategy.Units
             }
 
             UnitData firstUnit = units[0];
+            Units = units;
+            Faction = firstUnit.faction;
+            X = firstUnit.x;
+            Y = firstUnit.y;
             transform.position = worldPosition;
             Faction faction = firstUnit.faction;
+            BoxCollider2D boxCollider = GetComponent<BoxCollider2D>();
+            if (boxCollider == null)
+            {
+                boxCollider = gameObject.AddComponent<BoxCollider2D>();
+            }
+            boxCollider.size = size;
+            boxCollider.offset = Vector2.zero;
+
             Color factionColor = faction == Faction.Player
                 ? new Color(0.13f, 0.32f, 0.72f, 1f)
                 : faction == Faction.Enemy

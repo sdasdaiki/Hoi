@@ -86,6 +86,114 @@ namespace EdoStrategy.Units
             return unit != null && views.TryGetValue(unit, out view) ? view : null;
         }
 
+        public HexStackCounterView GetCounterAtWorldPosition(Vector2 worldPos)
+        {
+            Physics2D.SyncTransforms();
+            Collider2D[] colliders = Physics2D.OverlapPointAll(worldPos);
+            var checkedCounters = new HashSet<HexStackCounterView>();
+            HexStackCounterView frontmostCounter = null;
+            for (int i = 0; i < colliders.Length; i++)
+            {
+                Collider2D hit = colliders[i];
+                HexStackCounterView counter = hit != null
+                    ? hit.GetComponentInParent<HexStackCounterView>()
+                    : null;
+                if (counter == null ||
+                    !counter.isActiveAndEnabled ||
+                    counter.Units == null ||
+                    counter.Units.Count == 0 ||
+                    !counters.Contains(counter) ||
+                    !checkedCounters.Add(counter))
+                {
+                    continue;
+                }
+
+                if (frontmostCounter == null ||
+                    IsCounterInFrontOf(counter, frontmostCounter))
+                {
+                    frontmostCounter = counter;
+                }
+            }
+
+            return frontmostCounter;
+        }
+
+        private static bool IsCounterInFrontOf(
+            HexStackCounterView candidate,
+            HexStackCounterView current)
+        {
+            Renderer candidateRenderer = GetTopRenderer(candidate);
+            Renderer currentRenderer = GetTopRenderer(current);
+            if (candidateRenderer != null && currentRenderer != null)
+            {
+                int candidateLayer =
+                    SortingLayer.GetLayerValueFromID(
+                        candidateRenderer.sortingLayerID);
+                int currentLayer =
+                    SortingLayer.GetLayerValueFromID(
+                        currentRenderer.sortingLayerID);
+                if (candidateLayer != currentLayer)
+                {
+                    return candidateLayer > currentLayer;
+                }
+                if (candidateRenderer.sortingOrder !=
+                    currentRenderer.sortingOrder)
+                {
+                    return candidateRenderer.sortingOrder >
+                           currentRenderer.sortingOrder;
+                }
+
+                Camera camera = Camera.main;
+                if (camera != null)
+                {
+                    float candidateDepth = camera.WorldToScreenPoint(
+                        candidateRenderer.bounds.center).z;
+                    float currentDepth = camera.WorldToScreenPoint(
+                        currentRenderer.bounds.center).z;
+                    if (!Mathf.Approximately(candidateDepth, currentDepth))
+                    {
+                        return candidateDepth < currentDepth;
+                    }
+                }
+            }
+            else if (candidateRenderer != null || currentRenderer != null)
+            {
+                return candidateRenderer != null;
+            }
+
+            return candidate.transform.GetSiblingIndex() >
+                   current.transform.GetSiblingIndex();
+        }
+
+        private static Renderer GetTopRenderer(
+            HexStackCounterView counter)
+        {
+            Renderer[] renderers =
+                counter.GetComponentsInChildren<Renderer>();
+            Renderer topRenderer = null;
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                Renderer renderer = renderers[i];
+                if (renderer == null || !renderer.enabled)
+                {
+                    continue;
+                }
+
+                if (topRenderer == null ||
+                    SortingLayer.GetLayerValueFromID(
+                        renderer.sortingLayerID) >
+                    SortingLayer.GetLayerValueFromID(
+                        topRenderer.sortingLayerID) ||
+                    renderer.sortingLayerID == topRenderer.sortingLayerID &&
+                    renderer.sortingOrder > topRenderer.sortingOrder)
+                {
+                    topRenderer = renderer;
+                }
+            }
+
+            return topRenderer;
+        }
+
         public void RefreshAllViews()
         {
             RefreshCounters();
@@ -277,6 +385,7 @@ namespace EdoStrategy.Units
             if (turnManager == null ||
                 turnManager.State != BattleState.PlayerCommandPhase ||
                 selectedUnit == null ||
+                turnManager.SelectedUnits.Count == 0 ||
                 unitManager == null ||
                 mapView == null ||
                 mapView.Grid == null)
@@ -293,6 +402,16 @@ namespace EdoStrategy.Units
                 .Append(selectedUnit.x)
                 .Append(',')
                 .Append(selectedUnit.y);
+            foreach (UnitData selected in turnManager.SelectedUnits)
+            {
+                if (selected != null)
+                {
+                    occupancyKey.Append("|selected:")
+                        .Append(selected.unitId)
+                        .Append(':')
+                        .Append(selected.remainingMovePoints);
+                }
+            }
             foreach (UnitData unit in unitManager.Units)
             {
                 occupancyKey.Append('|')
@@ -314,30 +433,97 @@ namespace EdoStrategy.Units
 
             ClearReachableHighlights();
 
-            UnitDefinition definition =
-                gameManager != null
-                    ? gameManager.GetUnitDefinition(
-                        GetUnitTypeId(selectedUnit))
-                    : null;
-            int movePoints =
-                definition != null ? definition.movePoints : 0;
-            if (movePoints <= 0)
+            IReadOnlyList<UnitData> selectedUnits = turnManager.SelectedUnits;
+            var reachableCells = new HashSet<Vector2Int>();
+            if (selectedUnits.Count == 1)
             {
-                return;
+                UnitData selected = selectedUnits[0];
+                if (selected != null && selected.IsAlive)
+                {
+                    UnitDefinition definition =
+                        gameManager != null
+                            ? gameManager.GetUnitDefinition(
+                                GetUnitTypeId(selected))
+                            : null;
+                    List<Vector2Int> unitReachable =
+                        mapView.Grid.GetReachableCells(
+                            selected.x,
+                            selected.y,
+                            selected.remainingMovePoints,
+                            selected.faction,
+                            definition,
+                            unitManager);
+                    reachableCells.UnionWith(unitReachable);
+                }
             }
+            else
+            {
+                bool firstUnit = true;
+                UnitData firstSelected = selectedUnits[0];
+                bool allUnitsShareCell =
+                    firstSelected != null && firstSelected.IsAlive;
+                for (int i = 0; i < selectedUnits.Count; i++)
+                {
+                    UnitData selected = selectedUnits[i];
+                    if (selected == null || !selected.IsAlive)
+                    {
+                        reachableCells.Clear();
+                        allUnitsShareCell = false;
+                        break;
+                    }
 
-            List<Vector2Int> reachable =
-                mapView.Grid.GetReachableCells(
-                    selectedUnit.x,
-                    selectedUnit.y,
-                    movePoints,
-                    Faction.Player,
-                    definition,
-                    unitManager);
+                    if (allUnitsShareCell &&
+                        (selected.x != firstSelected.x ||
+                         selected.y != firstSelected.y))
+                    {
+                        allUnitsShareCell = false;
+                    }
+
+                    UnitDefinition definition =
+                        gameManager != null
+                            ? gameManager.GetUnitDefinition(
+                                GetUnitTypeId(selected))
+                            : null;
+                    List<Vector2Int> unitReachable =
+                        mapView.Grid.GetReachableCells(
+                            selected.x,
+                            selected.y,
+                            selected.remainingMovePoints,
+                            selected.faction,
+                            definition,
+                            unitManager);
+                    var unitReachableCells =
+                        new HashSet<Vector2Int>(unitReachable)
+                        {
+                            new Vector2Int(selected.x, selected.y)
+                        };
+
+                    if (firstUnit)
+                    {
+                        reachableCells.UnionWith(unitReachableCells);
+                        firstUnit = false;
+                    }
+                    else
+                    {
+                        reachableCells.IntersectWith(unitReachableCells);
+                    }
+
+                    if (reachableCells.Count == 0)
+                    {
+                        break;
+                    }
+                }
+
+                if (allUnitsShareCell)
+                {
+                    reachableCells.Remove(
+                        new Vector2Int(firstSelected.x, firstSelected.y));
+                }
+            }
 
             Sprite highlightSprite =
                 LoadBorderedHexSprite();
-            foreach (Vector2Int cell in reachable)
+            foreach (Vector2Int cell in reachableCells)
             {
                 GameObject highlightObject =
                     new GameObject(

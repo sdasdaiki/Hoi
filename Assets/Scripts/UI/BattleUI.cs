@@ -467,6 +467,7 @@ namespace EdoStrategy.UI
             {
                 CloseUnitListPanel();
             }
+            RefreshUi();
         }
 
         private void CloseUnitListPanel()

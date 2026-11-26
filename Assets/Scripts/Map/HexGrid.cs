@@ -410,6 +410,7 @@ namespace EdoStrategy.Map
             {
                 UnitData occupant = occupants[i];
                 if (occupant != null &&
+                    occupant.IsAlive &&
                     (occupant.faction != movingFaction ||
                      blockAllWhenFactionIsNone &&
                      movingFaction == Faction.None))

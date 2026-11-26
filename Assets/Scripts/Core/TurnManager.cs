@@ -125,6 +125,7 @@ namespace EdoStrategy.Core
                 !BattleUI.IsInputFieldFocused())
             {
                 ClearAllOrdersForSelectedUnits();
+                return;
             }
 
             if (EventSystem.current != null &&
@@ -133,12 +134,20 @@ namespace EdoStrategy.Core
                 return;
             }
 
-            if (Input.GetMouseButtonDown(0) &&
-                !Input.GetMouseButton(2) &&
-                (battleCameraController == null ||
-                 !battleCameraController.IsPanning))
+            if (battleCameraController != null &&
+                battleCameraController.IsPanning)
             {
-                HandleCellClick(Input.mousePosition);
+                return;
+            }
+
+            if (Input.GetMouseButtonDown(0) &&
+                !Input.GetMouseButton(2))
+            {
+                HandleCellSelectionClick(Input.mousePosition);
+            }
+            else if (Input.GetMouseButtonDown(1))
+            {
+                HandleCellOrderClick(Input.mousePosition);
             }
         }
 
@@ -1556,7 +1565,9 @@ namespace EdoStrategy.Core
             List<UnitData> occupants = unitManager.GetUnitsAt(x, y);
             for (int i = 0; i < occupants.Count; i++)
             {
-                if (occupants[i].faction != faction)
+                if (occupants[i] != null &&
+                    occupants[i].IsAlive &&
+                    occupants[i].faction != faction)
                 {
                     return true;
                 }
@@ -1597,7 +1608,7 @@ namespace EdoStrategy.Core
                 return false;
             }
 
-            if (HasEnemyAt(targetX, targetY, unit.faction))
+            if (HasLivingEnemyAt(targetX, targetY, unit.faction))
             {
                 Debug.LogWarning(
                     string.Format(
@@ -1729,9 +1740,110 @@ namespace EdoStrategy.Core
             }
         }
 
-        private void HandleCellClick(Vector2 screenPosition)
+        private void HandleCellSelectionClick(Vector2 screenPosition)
         {
             if (mapView == null ||
+                battleCamera == null ||
+                unitManager == null)
+            {
+                return;
+            }
+
+            Vector3 worldPosition =
+                battleCamera.ScreenToWorldPoint(
+                    new Vector3(screenPosition.x, screenPosition.y, battleCamera.nearClipPlane));
+            bool isShiftHeld =
+                Input.GetKey(KeyCode.LeftShift) ||
+                Input.GetKey(KeyCode.RightShift);
+            HexStackCounterView counter =
+                unitBoardView != null
+                    ? unitBoardView.GetCounterAtWorldPosition(
+                        new Vector2(worldPosition.x, worldPosition.y))
+                    : null;
+            if (counter != null)
+            {
+                int counterX = counter.X;
+                int counterY = counter.Y;
+                List<UnitData> cellUnits =
+                    unitManager.GetUnitsAt(counterX, counterY);
+                if (counter.Faction == Faction.Player)
+                {
+                    var counterUnits = new List<UnitData>(counter.Units);
+                    if (isShiftHeld)
+                    {
+                        ToggleCellUnitSelection(counterUnits);
+                    }
+                    else
+                    {
+                        SelectUnits(counterUnits);
+                    }
+                }
+
+                OnCellUnitsSelected?.Invoke(
+                    counterX,
+                    counterY,
+                    cellUnits);
+                return;
+            }
+
+            Tilemap tilemap = mapView.GetComponent<Tilemap>();
+            if (tilemap == null)
+            {
+                return;
+            }
+
+            Vector3Int cellPosition = tilemap.WorldToCell(worldPosition);
+
+            List<UnitData> clickedUnits =
+                unitManager.GetUnitsAt(cellPosition.x, cellPosition.y);
+            var playerUnits = new List<UnitData>();
+            for (int i = 0; i < clickedUnits.Count; i++)
+            {
+                if (clickedUnits[i] != null &&
+                    clickedUnits[i].faction == Faction.Player &&
+                    clickedUnits[i].IsAlive)
+                {
+                    playerUnits.Add(clickedUnits[i]);
+                }
+            }
+
+            if (isShiftHeld && playerUnits.Count == 0)
+            {
+                return;
+            }
+
+            if (playerUnits.Count > 0)
+            {
+                OnCellUnitsSelected?.Invoke(
+                    cellPosition.x,
+                    cellPosition.y,
+                    clickedUnits);
+                if (isShiftHeld)
+                {
+                    ToggleCellUnitSelection(playerUnits);
+                    return;
+                }
+                if (playerUnits.Count == 1)
+                {
+                    SelectUnit(playerUnits[0]);
+                }
+                return;
+            }
+
+            if (!isShiftHeld)
+            {
+                SelectUnits(null);
+                OnCellUnitsSelected?.Invoke(
+                    cellPosition.x,
+                    cellPosition.y,
+                    new List<UnitData>());
+            }
+        }
+
+        private void HandleCellOrderClick(Vector2 screenPosition)
+        {
+            if (selectedUnits.Count == 0 ||
+                mapView == null ||
                 battleCamera == null ||
                 unitManager == null)
             {
@@ -1748,78 +1860,28 @@ namespace EdoStrategy.Core
                 battleCamera.ScreenToWorldPoint(
                     new Vector3(screenPosition.x, screenPosition.y, battleCamera.nearClipPlane));
             Vector3Int cellPosition = tilemap.WorldToCell(worldPosition);
-
             List<UnitData> clickedUnits =
                 unitManager.GetUnitsAt(cellPosition.x, cellPosition.y);
-            bool isShiftHeld =
-                Input.GetKey(KeyCode.LeftShift) ||
-                Input.GetKey(KeyCode.RightShift);
-            var playerUnits = new List<UnitData>();
-            for (int i = 0; i < clickedUnits.Count; i++)
-            {
-                if (clickedUnits[i] != null &&
-                    clickedUnits[i].faction == Faction.Player &&
-                    clickedUnits[i].IsAlive)
-                {
-                    playerUnits.Add(clickedUnits[i]);
-                }
-            }
-            OnCellUnitsSelected?.Invoke(
-                cellPosition.x,
-                cellPosition.y,
-                clickedUnits);
-
             UnitData targetEnemy = null;
             for (int i = 0; i < clickedUnits.Count; i++)
             {
-                if (clickedUnits[i] != null &&
-                    clickedUnits[i].faction == Faction.Enemy &&
-                    clickedUnits[i].IsAlive)
+                UnitData unit = clickedUnits[i];
+                if (unit != null &&
+                    unit.IsAlive &&
+                    unit.faction == Faction.Enemy)
                 {
-                    targetEnemy = clickedUnits[i];
+                    targetEnemy = unit;
                     break;
                 }
             }
+
             if (targetEnemy != null)
             {
-                if (selectedUnits.Count > 0)
-                {
-                    TryAttackSelectedUnits(targetEnemy);
-                }
+                TryAttackSelectedUnits(targetEnemy);
                 return;
             }
 
-            if (isShiftHeld && playerUnits.Count == 0)
-            {
-                return;
-            }
-
-            if (playerUnits.Count > 0)
-            {
-                if (isShiftHeld)
-                {
-                    ToggleCellUnitSelection(playerUnits);
-                    return;
-                }
-                if (playerUnits.Count == 1)
-                {
-                    SelectUnit(playerUnits[0]);
-                }
-                return;
-            }
-
-            if (isShiftHeld)
-            {
-                return;
-            }
-
-            if (selectedUnits.Count > 0 &&
-                !TryMoveSelectedUnit(
-                    cellPosition.x,
-                    cellPosition.y))
-            {
-                SelectUnit(null);
-            }
+            TryMoveSelectedUnit(cellPosition.x, cellPosition.y);
         }
 
         public bool HasMoveOrder(UnitData unit, out Order moveOrder)
