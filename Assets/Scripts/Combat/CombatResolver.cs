@@ -27,6 +27,19 @@ namespace EdoStrategy.Combat
         private const int Permille = 1000;
         private const int MinimumNetDefense = 50;
 
+        public static bool IsAdjacent(
+            int firstX,
+            int firstY,
+            int secondX,
+            int secondY)
+        {
+            return HexUtility.DistanceOffset(
+                firstX,
+                firstY,
+                secondX,
+                secondY) == 1;
+        }
+
         public static bool CanAttack(
             UnitData attacker,
             UnitData defender,

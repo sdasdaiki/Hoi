@@ -150,13 +150,6 @@ namespace EdoStrategy.Core
                 return;
             }
 
-            if (Input.GetMouseButtonDown(1) &&
-                InputMode != CommandInputMode.Normal)
-            {
-                CancelCommandInputMode();
-                return;
-            }
-
             if (EventSystem.current != null &&
                 EventSystem.current.IsPointerOverGameObject())
             {
@@ -166,6 +159,13 @@ namespace EdoStrategy.Core
             if (battleCameraController != null &&
                 battleCameraController.IsPanning)
             {
+                return;
+            }
+
+            if (Input.GetMouseButtonDown(1) &&
+                InputMode != CommandInputMode.Normal)
+            {
+                HandleCommandInputModeClick(Input.mousePosition);
                 return;
             }
 
@@ -445,15 +445,11 @@ namespace EdoStrategy.Core
                 return false;
             }
 
-            UnitDefinition definition = GetUnitDefinition(unit);
-            int targetRange = definition != null
-                ? Mathf.Max(1, definition.attackRange)
-                : 1;
-            if (HexUtility.DistanceOffset(
+            if (!CombatResolver.IsAdjacent(
                     unit.x,
                     unit.y,
                     watchedX,
-                    watchedY) > targetRange)
+                    watchedY))
             {
                 return false;
             }
@@ -484,14 +480,17 @@ namespace EdoStrategy.Core
                 return false;
             }
 
-            UnitDefinition definition = GetUnitDefinition(unit);
-            int range = definition != null ? definition.attackRange : 0;
-            if (range <= 0 ||
-                HexUtility.DistanceOffset(
+            if (!CombatResolver.IsAdjacent(
                     moveTargetX,
                     moveTargetY,
                     assaultTargetX,
-                    assaultTargetY) > range)
+                    assaultTargetY))
+            {
+                return false;
+            }
+
+            UnitDefinition definition = GetUnitDefinition(unit);
+            if (definition == null)
             {
                 return false;
             }
@@ -1616,6 +1615,15 @@ namespace EdoStrategy.Core
                         continue;
                     }
 
+                    if (!CombatResolver.IsAdjacent(
+                            watcher.x,
+                            watcher.y,
+                            proposal.destination.x,
+                            proposal.destination.y))
+                    {
+                        continue;
+                    }
+
                     UnitDefinition ambusherDefinition =
                         GetUnitDefinition(watcher);
                     UnitDefinition targetDefinition =
@@ -2030,15 +2038,15 @@ namespace EdoStrategy.Core
                     GetUnitDefinition(attacker);
                 if (defender == null ||
                     attackerDefinition == null ||
-                    HexUtility.DistanceOffset(
+                    !CombatResolver.IsAdjacent(
                         attacker.x,
                         attacker.y,
                         defender.x,
-                        defender.y) > attackerDefinition.attackRange)
+                        defender.y))
                 {
                     AddCombatLog(
                         GetUnitLabel(attacker) +
-                        " の急襲は対象不在または射程外のため不発となりました。");
+                        " の急襲は対象不在または隣接マス以外のため不発となりました。");
                     RemoveOrder(attacker, order);
                     continue;
                 }
@@ -3546,14 +3554,11 @@ namespace EdoStrategy.Core
 
                     Vector2Int destination =
                         pendingMove.path[pendingMove.path.Count - 1];
-                    UnitDefinition definition =
-                        GetUnitDefinition(pendingMove.unit);
-                    if (definition == null ||
-                        HexUtility.DistanceOffset(
+                    if (!CombatResolver.IsAdjacent(
                             destination.x,
                             destination.y,
                             clickedCell.x,
-                            clickedCell.y) > definition.attackRange)
+                            clickedCell.y))
                     {
                         continue;
                     }
@@ -3698,12 +3703,6 @@ namespace EdoStrategy.Core
                 battleCamera == null ||
                 unitManager == null)
             {
-                return;
-            }
-
-            if (InputMode != CommandInputMode.Normal)
-            {
-                HandleCommandInputModeClick(screenPosition);
                 return;
             }
 
