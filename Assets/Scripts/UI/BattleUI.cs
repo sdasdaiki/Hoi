@@ -6,6 +6,7 @@ using EdoStrategy.Units;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 namespace EdoStrategy.UI
@@ -18,12 +19,22 @@ namespace EdoStrategy.UI
         [SerializeField] private UnitBoardView unitBoardView;
         [SerializeField] private TMP_FontAsset japaneseFont;
 
+        private HexTilemapView tilemapView;
         private GameObject statusPanel;
         private TextMeshProUGUI statusLabel;
         private Button startBattleButton;
         private Button endTurnButton;
         private Button plannedArrowToggleButton;
         private TextMeshProUGUI plannedArrowToggleLabel;
+        private GameObject commandPanel;
+        private TextMeshProUGUI commandGuideLabel;
+        private Button cancelCommandInputButton;
+        private GameObject combatLogPanel;
+        private TextMeshProUGUI combatLogLabel;
+        private GameObject battleResultPanel;
+        private TextMeshProUGUI battleResultLabel;
+        private readonly List<string> combatLogLines =
+            new List<string>();
         private GameObject unitListPanel;
         private RectTransform unitListContent;
         private TurnManager subscribedTurnManager;
@@ -45,6 +56,7 @@ namespace EdoStrategy.UI
             {
                 unitBoardView = FindObjectOfType<UnitBoardView>();
             }
+            tilemapView = FindObjectOfType<HexTilemapView>();
             ApplyJapaneseFontToTextComponents();
         }
 
@@ -99,6 +111,10 @@ namespace EdoStrategy.UI
                     ShowUnitsAtCell;
                 subscribedTurnManager.OnCommandStateChanged -=
                     HandleCommandStateChanged;
+                subscribedTurnManager.OnCombatLogUpdated -=
+                    HandleCombatLogUpdated;
+                subscribedTurnManager.OnBattleEnded -=
+                    HandleBattleEnded;
             }
         }
 
@@ -121,6 +137,7 @@ namespace EdoStrategy.UI
             int organization = 0;
             string terrainName = "None";
             int defenseMultiplier = 0;
+            int fortificationLevel = 0;
 
             if (selectedUnit != null)
             {
@@ -142,8 +159,7 @@ namespace EdoStrategy.UI
                 currentManpower = selectedUnit.CurrentTotalManpower;
                 organization = selectedUnit.organization;
 
-                HexTilemapView mapView =
-                    FindObjectOfType<HexTilemapView>();
+                HexTilemapView mapView = GetMapView();
                 if (mapView != null &&
                     mapView.Grid != null)
                 {
@@ -153,6 +169,7 @@ namespace EdoStrategy.UI
                             selectedUnit.y);
                     if (cell != null)
                     {
+                        fortificationLevel = cell.fortificationLevel;
                         TerrainDefinition terrain =
                             mapView.Grid.GetTerrainDefinition(
                                 cell.terrainId);
@@ -170,7 +187,7 @@ namespace EdoStrategy.UI
             }
 
             statusLabel.text = string.Format(
-                "Phase: {0}\nTurn: {1}\nSelected: {2}\nUnit: {3}\nPosition: ({4}, {5})\nManpower: {6} / {7}\nOrganization: {8}\nRemaining Move: {9}\nTerrain: {10}\nDefense: {11}",
+                "Phase: {0}\nTurn: {1}\nSelected: {2}\nUnit: {3}\nPosition: ({4}, {5})\nManpower: {6} / {7}\nOrganization: {8}\nRemaining Move: {9}\nTerrain: {10}\nDefense: {11}\n陣地レベル: {12}/5\n予約命令: {13}",
                 turnManager.State,
                 turnManager.TurnNumber,
                 selectedName,
@@ -182,7 +199,11 @@ namespace EdoStrategy.UI
                 organization,
                 selectedUnit != null ? selectedUnit.remainingMovePoints : 0,
                 terrainName,
-                defenseMultiplier);
+                defenseMultiplier,
+                fortificationLevel,
+                selectedUnit != null
+                    ? GetOrderStatus(selectedUnit)
+                    : "命令なし");
 
             if (startBattleButton != null)
             {
@@ -194,6 +215,7 @@ namespace EdoStrategy.UI
                 endTurnButton.gameObject.SetActive(
                     turnManager.State == BattleState.PlayerCommandPhase);
             }
+            RefreshCommandPanel(selectedUnit);
             if (plannedArrowToggleLabel != null)
             {
                 bool showAll =
@@ -302,6 +324,9 @@ namespace EdoStrategy.UI
                 plannedArrowToggleButton
                     .GetComponentInChildren<TextMeshProUGUI>();
             CreateUnitListPanel(canvas.transform, font);
+            CreateCommandPanel(canvas.transform, font);
+            CreateCombatLogPanel(canvas.transform, font);
+            CreateBattleResultPanel(canvas.transform, font);
             ApplyJapaneseFontToTextComponents();
         }
 
@@ -423,6 +448,240 @@ namespace EdoStrategy.UI
             scroll.vertical = true;
             scroll.movementType = ScrollRect.MovementType.Clamped;
             unitListPanel.SetActive(false);
+        }
+
+        private void CreateCommandPanel(
+            Transform parent,
+            TMP_FontAsset font)
+        {
+            RectTransform panelRect = CreateUiRect(
+                "Command Actions Panel",
+                parent,
+                new Vector2(0.5f, 0f),
+                new Vector2(0.5f, 0f),
+                new Vector2(0f, 14f),
+                new Vector2(660f, 130f));
+            commandPanel = panelRect.gameObject;
+            Image background = commandPanel.AddComponent<Image>();
+            background.sprite = GetUiRectangleSprite();
+            background.color = new Color(0.04f, 0.06f, 0.08f, 0.88f);
+
+            CreatePanelButton(
+                "Defend Order",
+                "防御",
+                panelRect,
+                font,
+                new Vector2(-260f, -38f),
+                new Vector2(110f, 44f),
+                OnIssueDefendOrder);
+            CreatePanelButton(
+                "Entrench Order",
+                "塹壕",
+                panelRect,
+                font,
+                new Vector2(-140f, -38f),
+                new Vector2(110f, 44f),
+                OnIssueEntrenchOrder);
+            CreatePanelButton(
+                "Ambush Order",
+                "伏兵",
+                panelRect,
+                font,
+                new Vector2(-20f, -38f),
+                new Vector2(110f, 44f),
+                OnBeginAmbushOrder);
+            CreatePanelButton(
+                "Assault Order",
+                "急襲",
+                panelRect,
+                font,
+                new Vector2(100f, -38f),
+                new Vector2(110f, 44f),
+                OnBeginAssaultOrder);
+            cancelCommandInputButton = CreatePanelButton(
+                "Cancel Command Input",
+                "入力キャンセル",
+                panelRect,
+                font,
+                new Vector2(235f, -38f),
+                new Vector2(120f, 44f),
+                OnCancelCommandInput);
+
+            RectTransform guideRect = CreateUiRect(
+                "Command Input Guide",
+                panelRect,
+                new Vector2(0.5f, 1f),
+                new Vector2(0.5f, 1f),
+                new Vector2(0f, -94f),
+                new Vector2(630f, 28f));
+            guideRect.pivot = new Vector2(0.5f, 0.5f);
+            commandGuideLabel =
+                guideRect.gameObject.AddComponent<TextMeshProUGUI>();
+            commandGuideLabel.font = font;
+            commandGuideLabel.fontSize = 17f;
+            commandGuideLabel.color = Color.white;
+            commandGuideLabel.alignment = TextAlignmentOptions.Center;
+            commandGuideLabel.raycastTarget = false;
+        }
+
+        private void CreateCombatLogPanel(
+            Transform parent,
+            TMP_FontAsset font)
+        {
+            RectTransform panelRect = CreateUiRect(
+                "Combat Log Panel",
+                parent,
+                Vector2.zero,
+                Vector2.zero,
+                new Vector2(16f, 16f),
+                new Vector2(460f, 190f));
+            panelRect.pivot = Vector2.zero;
+            combatLogPanel = panelRect.gameObject;
+            Image background = combatLogPanel.AddComponent<Image>();
+            background.sprite = GetUiRectangleSprite();
+            background.color = new Color(0f, 0f, 0f, 0.78f);
+
+            RectTransform titleRect = CreateUiRect(
+                "Combat Log Title",
+                panelRect,
+                new Vector2(0f, 1f),
+                new Vector2(1f, 1f),
+                new Vector2(12f, -8f),
+                new Vector2(-24f, 28f));
+            titleRect.pivot = new Vector2(0f, 1f);
+            TextMeshProUGUI title =
+                titleRect.gameObject.AddComponent<TextMeshProUGUI>();
+            title.font = font;
+            title.fontSize = 19f;
+            title.color = Color.white;
+            title.text = "戦闘ログ";
+            title.alignment = TextAlignmentOptions.MidlineLeft;
+            title.raycastTarget = false;
+
+            RectTransform bodyRect = CreateUiRect(
+                "Combat Log Entries",
+                panelRect,
+                Vector2.zero,
+                Vector2.one,
+                Vector2.zero,
+                Vector2.zero);
+            bodyRect.offsetMin = new Vector2(12f, 10f);
+            bodyRect.offsetMax = new Vector2(-12f, -38f);
+            combatLogLabel =
+                bodyRect.gameObject.AddComponent<TextMeshProUGUI>();
+            combatLogLabel.font = font;
+            combatLogLabel.fontSize = 16f;
+            combatLogLabel.color = new Color(1f, 1f, 1f, 0.96f);
+            combatLogLabel.alignment = TextAlignmentOptions.BottomLeft;
+            combatLogLabel.enableWordWrapping = true;
+            combatLogLabel.raycastTarget = false;
+            RefreshCombatLogText();
+        }
+
+        private void CreateBattleResultPanel(
+            Transform parent,
+            TMP_FontAsset font)
+        {
+            RectTransform panelRect = CreateUiRect(
+                "Battle Result Panel",
+                parent,
+                new Vector2(0.5f, 0.5f),
+                new Vector2(0.5f, 0.5f),
+                Vector2.zero,
+                new Vector2(580f, 340f));
+            panelRect.pivot = new Vector2(0.5f, 0.5f);
+            battleResultPanel = panelRect.gameObject;
+            Image background = battleResultPanel.AddComponent<Image>();
+            background.sprite = GetUiRectangleSprite();
+            background.color = new Color(0f, 0f, 0f, 0.94f);
+
+            RectTransform resultTextRect = CreateUiRect(
+                "Battle Result Text",
+                panelRect,
+                new Vector2(0.5f, 1f),
+                new Vector2(0.5f, 1f),
+                new Vector2(0f, -35f),
+                new Vector2(520f, 100f));
+            resultTextRect.pivot = new Vector2(0.5f, 1f);
+            battleResultLabel =
+                resultTextRect.gameObject.AddComponent<TextMeshProUGUI>();
+            battleResultLabel.font = font;
+            battleResultLabel.fontSize = 32f;
+            battleResultLabel.color = Color.white;
+            battleResultLabel.alignment = TextAlignmentOptions.Center;
+            battleResultLabel.enableWordWrapping = true;
+            battleResultLabel.raycastTarget = false;
+
+            CreatePanelButton(
+                "Restart Battle",
+                "再戦",
+                panelRect,
+                font,
+                new Vector2(0f, -280f),
+                new Vector2(190f, 54f),
+                OnRestartBattle);
+            battleResultPanel.SetActive(false);
+        }
+
+        private void RefreshCommandPanel(UnitData selectedUnit)
+        {
+            if (commandPanel == null)
+            {
+                return;
+            }
+
+            bool canIssueOrders =
+                turnManager.State == BattleState.PlayerCommandPhase &&
+                selectedUnit != null &&
+                selectedUnit.faction == Faction.Player;
+            commandPanel.SetActive(canIssueOrders);
+            if (!canIssueOrders)
+            {
+                return;
+            }
+
+            TurnManager.CommandInputMode inputMode = turnManager.InputMode;
+            if (cancelCommandInputButton != null)
+            {
+                cancelCommandInputButton.gameObject.SetActive(
+                    inputMode != TurnManager.CommandInputMode.Normal);
+            }
+            if (commandGuideLabel == null)
+            {
+                return;
+            }
+
+            switch (inputMode)
+            {
+                case TurnManager.CommandInputMode.SelectAmbushTarget:
+                    commandGuideLabel.text =
+                        "伏兵: 監視するマスを左クリックしてください";
+                    break;
+                case TurnManager.CommandInputMode.SelectAssaultMoveTarget:
+                    commandGuideLabel.text =
+                        "急襲: 先に移動するマスを左クリックしてください";
+                    break;
+                case TurnManager.CommandInputMode.SelectAssaultAttackTarget:
+                    commandGuideLabel.text =
+                        "急襲: 移動後に攻撃する敵マスを左クリックしてください";
+                    break;
+                default:
+                    commandGuideLabel.text =
+                        "防御・塹壕・伏兵・急襲を選択。移動と通常攻撃は右クリック";
+                    break;
+            }
+        }
+
+        private void RefreshCombatLogText()
+        {
+            if (combatLogLabel == null)
+            {
+                return;
+            }
+
+            combatLogLabel.text = combatLogLines.Count == 0
+                ? "戦闘記録はありません"
+                : string.Join("\n", combatLogLines);
         }
 
         private void ShowUnitsAtCell(
@@ -635,12 +894,13 @@ namespace EdoStrategy.UI
                 string orderStatus = GetOrderStatus(unit);
 
                 row.Details.text = string.Format(
-                    "{0} / {1}\n兵員 {2}/{3}  組織 {4}%  {5}",
+                    "{0} / {1}\n兵員 {2}/{3}  組織 {4}%\n陣地 Lv{5}/5  {6}",
                     typeName,
                     unitName,
                     currentManpower,
                     maxManpower,
                     organizationPercent,
+                    GetFortificationLevel(unit),
                     orderStatus);
                 row.OrganizationFill.fillAmount =
                     unit.maxOrganization > 0
@@ -723,6 +983,10 @@ namespace EdoStrategy.UI
                     ShowUnitsAtCell;
                 subscribedTurnManager.OnCommandStateChanged -=
                     HandleCommandStateChanged;
+                subscribedTurnManager.OnCombatLogUpdated -=
+                    HandleCombatLogUpdated;
+                subscribedTurnManager.OnBattleEnded -=
+                    HandleBattleEnded;
             }
             subscribedTurnManager = turnManager;
             if (subscribedTurnManager != null)
@@ -731,6 +995,49 @@ namespace EdoStrategy.UI
                     ShowUnitsAtCell;
                 subscribedTurnManager.OnCommandStateChanged +=
                     HandleCommandStateChanged;
+                subscribedTurnManager.OnCombatLogUpdated +=
+                    HandleCombatLogUpdated;
+                subscribedTurnManager.OnBattleEnded +=
+                    HandleBattleEnded;
+
+                combatLogLines.Clear();
+                IReadOnlyList<string> existingLog =
+                    subscribedTurnManager.CombatLog;
+                int firstLine = Mathf.Max(0, existingLog.Count - 5);
+                for (int i = firstLine; i < existingLog.Count; i++)
+                {
+                    combatLogLines.Add(existingLog[i]);
+                }
+                RefreshCombatLogText();
+            }
+        }
+
+        private void HandleCombatLogUpdated(string entry)
+        {
+            if (string.IsNullOrEmpty(entry))
+            {
+                return;
+            }
+
+            combatLogLines.Add(entry);
+            while (combatLogLines.Count > 5)
+            {
+                combatLogLines.RemoveAt(0);
+            }
+            RefreshCombatLogText();
+        }
+
+        private void HandleBattleEnded(bool playerWon)
+        {
+            if (battleResultLabel != null)
+            {
+                battleResultLabel.text = playerWon
+                    ? "勝利: 敵本陣を撃破しました"
+                    : "敗北: 自軍本陣が陥落しました";
+            }
+            if (battleResultPanel != null)
+            {
+                battleResultPanel.SetActive(true);
             }
         }
 
@@ -744,17 +1051,56 @@ namespace EdoStrategy.UI
             }
 
             Order order = unit.pendingOrders[0];
-            if (order.orderType == OrderType.Move)
+            switch (order.orderType)
             {
-                return string.Format(
-                    "移動待機 ({0},{1})",
-                    order.targetX,
-                    order.targetY);
+                case OrderType.Move:
+                    return string.Format(
+                        "移動待機 ({0},{1})",
+                        order.targetX,
+                        order.targetY);
+                case OrderType.Attack:
+                    return string.Format(
+                        "通常攻撃待機 ({0},{1})",
+                        order.targetX,
+                        order.targetY);
+                case OrderType.Assault:
+                    return string.Format(
+                        "急襲攻撃待機 ({0},{1})",
+                        order.secondaryTargetX,
+                        order.secondaryTargetY);
+                case OrderType.Defend:
+                    return "防御待機";
+                case OrderType.Entrench:
+                    return "塹壕構築待機";
+                case OrderType.Ambush:
+                    return string.Format(
+                        "伏兵監視 ({0},{1})",
+                        order.secondaryTargetX,
+                        order.secondaryTargetY);
+                default:
+                    return "命令なし";
             }
-            return string.Format(
-                "攻撃待機 ({0},{1})",
-                order.targetX,
-                order.targetY);
+        }
+
+        private int GetFortificationLevel(UnitData unit)
+        {
+            HexTilemapView mapView = GetMapView();
+            if (unit == null || mapView == null || mapView.Grid == null)
+            {
+                return 0;
+            }
+
+            HexCell cell = mapView.Grid.GetCell(unit.x, unit.y);
+            return cell != null ? cell.fortificationLevel : 0;
+        }
+
+        private HexTilemapView GetMapView()
+        {
+            if (tilemapView == null)
+            {
+                tilemapView = FindObjectOfType<HexTilemapView>();
+            }
+            return tilemapView;
         }
 
         private static int GetUnitMaxManpower(UnitData unit)
@@ -896,6 +1242,54 @@ namespace EdoStrategy.UI
             return button;
         }
 
+        private static Button CreatePanelButton(
+            string name,
+            string label,
+            RectTransform parent,
+            TMP_FontAsset font,
+            Vector2 anchoredPosition,
+            Vector2 size,
+            UnityEngine.Events.UnityAction onClick)
+        {
+            RectTransform rect = CreateUiRect(
+                name,
+                parent,
+                new Vector2(0.5f, 1f),
+                new Vector2(0.5f, 1f),
+                anchoredPosition,
+                size);
+            rect.pivot = new Vector2(0.5f, 0.5f);
+
+            Button button = rect.gameObject.AddComponent<Button>();
+            Image image = rect.gameObject.AddComponent<Image>();
+            image.sprite = GetUiRectangleSprite();
+            image.color = new Color(0.13f, 0.18f, 0.24f, 0.98f);
+            button.targetGraphic = image;
+            button.onClick.AddListener(onClick);
+
+            RectTransform labelRect = CreateUiRect(
+                "Label",
+                rect,
+                Vector2.zero,
+                Vector2.one,
+                Vector2.zero,
+                Vector2.zero);
+            labelRect.offsetMin = Vector2.zero;
+            labelRect.offsetMax = Vector2.zero;
+            TextMeshProUGUI text =
+                labelRect.gameObject.AddComponent<TextMeshProUGUI>();
+            text.font = font;
+            text.text = label;
+            text.fontSize = 18f;
+            text.color = Color.white;
+            text.alignment = TextAlignmentOptions.Center;
+            text.enableAutoSizing = true;
+            text.fontSizeMin = 14f;
+            text.fontSizeMax = 18f;
+            text.raycastTarget = false;
+            return button;
+        }
+
         private void OnStartBattle()
         {
             if (turnManager != null)
@@ -923,6 +1317,57 @@ namespace EdoStrategy.UI
                 unitBoardView.ToggleAllPlannedArrows();
             }
             RefreshUi();
+        }
+
+        private void OnIssueDefendOrder()
+        {
+            if (turnManager != null)
+            {
+                turnManager.IssueDefendOrderToSelected();
+                RefreshUi();
+            }
+        }
+
+        private void OnIssueEntrenchOrder()
+        {
+            if (turnManager != null)
+            {
+                turnManager.IssueEntrenchOrderToSelected();
+                RefreshUi();
+            }
+        }
+
+        private void OnBeginAmbushOrder()
+        {
+            if (turnManager != null)
+            {
+                turnManager.BeginAmbushOrderMode();
+                RefreshUi();
+            }
+        }
+
+        private void OnBeginAssaultOrder()
+        {
+            if (turnManager != null)
+            {
+                turnManager.BeginAssaultOrderMode();
+                RefreshUi();
+            }
+        }
+
+        private void OnCancelCommandInput()
+        {
+            if (turnManager != null)
+            {
+                turnManager.CancelCommandInputMode();
+                RefreshUi();
+            }
+        }
+
+        private void OnRestartBattle()
+        {
+            Scene activeScene = SceneManager.GetActiveScene();
+            SceneManager.LoadScene(activeScene.name);
         }
 
         private static void EnsureEventSystem()
