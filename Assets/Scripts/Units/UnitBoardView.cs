@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using EdoStrategy.Combat;
 using EdoStrategy.Core;
 using EdoStrategy.Map;
 using EdoStrategy.Command;
@@ -25,8 +26,16 @@ namespace EdoStrategy.Units
         private TurnManager turnManager;
         private readonly List<SpriteRenderer> reachableHighlights =
             new List<SpriteRenderer>();
+        private readonly List<GameObject> orderVisuals =
+            new List<GameObject>();
         private UnitData lastHighlightedUnit;
         private string reachableOccupancyKey;
+        private Material orderArrowMaterial;
+        private Sprite orderArrowHeadSprite;
+        private bool hasPendingAssaultMoveTarget;
+        private Vector2Int pendingAssaultMoveTarget;
+        private TurnManager.CommandInputMode lastInputMode;
+        private bool hasObservedInputMode;
 
         public bool ShowAllPlannedArrows { get; private set; }
 
@@ -47,6 +56,19 @@ namespace EdoStrategy.Units
         private void OnDestroy()
         {
             Unsubscribe();
+            ClearOrderVisuals();
+            if (orderArrowMaterial != null)
+            {
+                Destroy(orderArrowMaterial);
+            }
+            if (orderArrowHeadSprite != null)
+            {
+                if (orderArrowHeadSprite.texture != null)
+                {
+                    Destroy(orderArrowHeadSprite.texture);
+                }
+                Destroy(orderArrowHeadSprite);
+            }
         }
 
         public void Initialize(UnitManager manager)
@@ -213,11 +235,99 @@ namespace EdoStrategy.Units
             {
                 turnManager = FindObjectOfType<TurnManager>();
             }
+            if (turnManager == null)
+            {
+                return;
+            }
+
+            TurnManager.CommandInputMode inputMode =
+                turnManager.InputMode;
+            bool modeChanged = hasObservedInputMode &&
+                inputMode != lastInputMode;
+            if (inputMode ==
+                    TurnManager.CommandInputMode.SelectAssaultMoveTarget &&
+                lastInputMode !=
+                    TurnManager.CommandInputMode.SelectAssaultMoveTarget)
+            {
+                hasPendingAssaultMoveTarget = false;
+            }
+
+            bool isAssaultMoveClick =
+                inputMode ==
+                    TurnManager.CommandInputMode.SelectAssaultMoveTarget ||
+                inputMode ==
+                    TurnManager.CommandInputMode.SelectAssaultAttackTarget &&
+                lastInputMode ==
+                    TurnManager.CommandInputMode.SelectAssaultMoveTarget;
+            if (isAssaultMoveClick &&
+                Input.GetMouseButtonDown(0) &&
+                TryGetCursorCell(out Vector2Int clickedCell))
+            {
+                pendingAssaultMoveTarget = clickedCell;
+                hasPendingAssaultMoveTarget = true;
+            }
+
+            if (inputMode == TurnManager.CommandInputMode.Normal ||
+                inputMode ==
+                    TurnManager.CommandInputMode.SelectAmbushTarget)
+            {
+                hasPendingAssaultMoveTarget = false;
+            }
+
+            if (modeChanged)
+            {
+                RefreshAllViews();
+            }
+            lastInputMode = inputMode;
+            hasObservedInputMode = true;
         }
 
         private void OnCommandStateChanged()
         {
+            reachableOccupancyKey = null;
             RefreshAllViews();
+        }
+
+        private bool TryGetCursorCell(out Vector2Int cellPosition)
+        {
+            cellPosition = Vector2Int.zero;
+            if (tilemap == null)
+            {
+                return false;
+            }
+
+            Camera camera = Camera.main;
+            if (camera == null)
+            {
+                camera = FindObjectOfType<Camera>();
+            }
+            if (camera == null)
+            {
+                return false;
+            }
+
+            Vector3 worldPosition = camera.ScreenToWorldPoint(
+                new Vector3(
+                    Input.mousePosition.x,
+                    Input.mousePosition.y,
+                    camera.nearClipPlane));
+            HexStackCounterView counter = GetCounterAtWorldPosition(
+                new Vector2(worldPosition.x, worldPosition.y));
+            if (counter != null)
+            {
+                cellPosition = new Vector2Int(counter.X, counter.Y);
+            }
+            else
+            {
+                Vector3Int tileCell = tilemap.WorldToCell(worldPosition);
+                cellPosition = new Vector2Int(tileCell.x, tileCell.y);
+            }
+
+            return mapView != null &&
+                mapView.Grid != null &&
+                mapView.Grid.IsInBounds(
+                    cellPosition.x,
+                    cellPosition.y);
         }
 
         private void RefreshCounters()
@@ -401,7 +511,17 @@ namespace EdoStrategy.Units
                 .Append(':')
                 .Append(selectedUnit.x)
                 .Append(',')
-                .Append(selectedUnit.y);
+                .Append(selectedUnit.y)
+                .Append("|mode:")
+                .Append((int)turnManager.InputMode)
+                .Append("|assaultTarget:")
+                .Append(hasPendingAssaultMoveTarget
+                    ? pendingAssaultMoveTarget.x
+                    : -1)
+                .Append(',')
+                .Append(hasPendingAssaultMoveTarget
+                    ? pendingAssaultMoveTarget.y
+                    : -1);
             foreach (UnitData selected in turnManager.SelectedUnits)
             {
                 if (selected != null)
@@ -523,33 +643,250 @@ namespace EdoStrategy.Units
 
             Sprite highlightSprite =
                 LoadBorderedHexSprite();
-            foreach (Vector2Int cell in reachableCells)
+            TurnManager.CommandInputMode inputMode =
+                turnManager.InputMode;
+            bool showMoveRange =
+                inputMode == TurnManager.CommandInputMode.Normal ||
+                inputMode ==
+                    TurnManager.CommandInputMode.SelectAssaultMoveTarget;
+            if (inputMode ==
+                TurnManager.CommandInputMode.SelectAssaultMoveTarget)
             {
-                GameObject highlightObject =
-                    new GameObject(
-                        "ReachableHighlight_" + cell.x + "_" + cell.y);
-                highlightObject.transform.SetParent(
-                    tilemap != null ? tilemap.transform : unitContainer,
-                    false);
-                highlightObject.transform.position =
-                    tilemap != null
-                        ? tilemap.GetCellCenterWorld(
-                            new Vector3Int(cell.x, cell.y, 0))
-                        : new Vector3(cell.x, cell.y, 0f);
-
-                SpriteRenderer renderer =
-                    highlightObject.AddComponent<SpriteRenderer>();
-                renderer.sprite =
-                    highlightSprite != null
-                        ? highlightSprite
-                        : CreateHighlightCircleSprite();
-                renderer.color =
-                    new Color(0.2f, 0.7f, 1f, 0.35f);
-                renderer.sortingOrder = 6;
-                highlightObject.transform.localScale =
-                    Vector3.one;
-                reachableHighlights.Add(renderer);
+                foreach (UnitData selected in selectedUnits)
+                {
+                    if (selected != null && selected.IsAlive)
+                    {
+                        reachableCells.Add(
+                            new Vector2Int(selected.x, selected.y));
+                    }
+                }
             }
+
+            if (showMoveRange)
+            {
+                foreach (Vector2Int cell in reachableCells)
+                {
+                    AddCellHighlight(
+                        cell,
+                        new Color(0.2f, 0.7f, 1f, 0.35f),
+                        "ReachableHighlight",
+                        6,
+                        highlightSprite);
+                }
+            }
+
+            if (inputMode == TurnManager.CommandInputMode.Normal)
+            {
+                HashSet<Vector2Int> attackableCells =
+                    GetAttackableEnemyCells(selectedUnits);
+                foreach (Vector2Int cell in attackableCells)
+                {
+                    AddCellHighlight(
+                        cell,
+                        new Color(1f, 0.25f, 0.25f, 0.45f),
+                        "AttackableHighlight",
+                        7,
+                        highlightSprite);
+                }
+            }
+            else if (inputMode ==
+                TurnManager.CommandInputMode.SelectAmbushTarget)
+            {
+                HashSet<Vector2Int> ambushCells =
+                    GetAmbushTargetCells(selectedUnits);
+                foreach (Vector2Int cell in ambushCells)
+                {
+                    AddCellHighlight(
+                        cell,
+                        new Color(0.75f, 0.35f, 1f, 0.5f),
+                        "AmbushTargetHighlight",
+                        7,
+                        highlightSprite);
+                }
+            }
+            else if (inputMode ==
+                TurnManager.CommandInputMode.SelectAssaultAttackTarget &&
+                hasPendingAssaultMoveTarget)
+            {
+                HashSet<Vector2Int> assaultCells =
+                    GetAssaultTargetCells(selectedUnits,
+                        pendingAssaultMoveTarget);
+                foreach (Vector2Int cell in assaultCells)
+                {
+                    AddCellHighlight(
+                        cell,
+                        new Color(1f, 0.35f, 0.12f, 0.55f),
+                        "AssaultTargetHighlight",
+                        7,
+                        highlightSprite);
+                }
+                AddCellHighlight(
+                    pendingAssaultMoveTarget,
+                    new Color(1f, 0.85f, 0.2f, 0.5f),
+                    "AssaultMoveTargetHighlight",
+                    8,
+                    highlightSprite);
+            }
+        }
+
+        private void AddCellHighlight(
+            Vector2Int cell,
+            Color color,
+            string name,
+            int sortingOrder,
+            Sprite highlightSprite)
+        {
+            GameObject highlightObject = new GameObject(
+                name + "_" + cell.x + "_" + cell.y);
+            highlightObject.transform.SetParent(
+                tilemap != null ? tilemap.transform : unitContainer,
+                false);
+            highlightObject.transform.position =
+                tilemap != null
+                    ? tilemap.GetCellCenterWorld(
+                        new Vector3Int(cell.x, cell.y, 0))
+                    : new Vector3(cell.x, cell.y, 0f);
+
+            SpriteRenderer renderer =
+                highlightObject.AddComponent<SpriteRenderer>();
+            renderer.sprite = highlightSprite != null
+                ? highlightSprite
+                : CreateHighlightCircleSprite();
+            renderer.color = color;
+            renderer.sortingOrder = sortingOrder;
+            highlightObject.transform.localScale = Vector3.one;
+            reachableHighlights.Add(renderer);
+        }
+
+        private HashSet<Vector2Int> GetAttackableEnemyCells(
+            IReadOnlyList<UnitData> attackers)
+        {
+            var cells = new HashSet<Vector2Int>();
+            if (unitManager == null || attackers == null)
+            {
+                return cells;
+            }
+
+            foreach (UnitData enemy in unitManager.Units)
+            {
+                if (enemy == null ||
+                    !enemy.IsAlive ||
+                    enemy.faction != Faction.Enemy)
+                {
+                    continue;
+                }
+
+                for (int i = 0; i < attackers.Count; i++)
+                {
+                    UnitData attacker = attackers[i];
+                    if (attacker == null || !attacker.IsAlive)
+                    {
+                        continue;
+                    }
+
+                    UnitDefinition definition = gameManager != null
+                        ? gameManager.GetUnitDefinition(
+                            GetUnitTypeId(attacker))
+                        : null;
+                    if (CombatResolver.CanAttack(
+                            attacker,
+                            enemy,
+                            definition))
+                    {
+                        cells.Add(new Vector2Int(enemy.x, enemy.y));
+                        break;
+                    }
+                }
+            }
+            return cells;
+        }
+
+        private HashSet<Vector2Int> GetAmbushTargetCells(
+            IReadOnlyList<UnitData> units)
+        {
+            var cells = new HashSet<Vector2Int>();
+            if (units == null || mapView == null || mapView.Grid == null)
+            {
+                return cells;
+            }
+
+            for (int i = 0; i < units.Count; i++)
+            {
+                UnitData unit = units[i];
+                if (unit == null || !unit.IsAlive)
+                {
+                    continue;
+                }
+
+                UnitDefinition definition = gameManager != null
+                    ? gameManager.GetUnitDefinition(GetUnitTypeId(unit))
+                    : null;
+                int range = definition != null
+                    ? Mathf.Max(1, definition.attackRange)
+                    : 1;
+                for (int y = 0; y < mapView.Grid.Height; y++)
+                {
+                    for (int x = 0; x < mapView.Grid.Width; x++)
+                    {
+                        int distance = HexUtility.DistanceOffset(
+                            unit.x,
+                            unit.y,
+                            x,
+                            y);
+                        if (distance > 0 && distance <= range)
+                        {
+                            cells.Add(new Vector2Int(x, y));
+                        }
+                    }
+                }
+            }
+            return cells;
+        }
+
+        private HashSet<Vector2Int> GetAssaultTargetCells(
+            IReadOnlyList<UnitData> attackers,
+            Vector2Int moveTarget)
+        {
+            var cells = new HashSet<Vector2Int>();
+            if (unitManager == null || attackers == null)
+            {
+                return cells;
+            }
+
+            foreach (UnitData enemy in unitManager.Units)
+            {
+                if (enemy == null ||
+                    !enemy.IsAlive ||
+                    enemy.faction != Faction.Enemy)
+                {
+                    continue;
+                }
+
+                for (int i = 0; i < attackers.Count; i++)
+                {
+                    UnitData attacker = attackers[i];
+                    if (attacker == null || !attacker.IsAlive)
+                    {
+                        continue;
+                    }
+
+                    UnitDefinition definition = gameManager != null
+                        ? gameManager.GetUnitDefinition(
+                            GetUnitTypeId(attacker))
+                        : null;
+                    if (definition != null &&
+                        HexUtility.DistanceOffset(
+                            moveTarget.x,
+                            moveTarget.y,
+                            enemy.x,
+                            enemy.y) <= definition.attackRange)
+                    {
+                        cells.Add(new Vector2Int(enemy.x, enemy.y));
+                        break;
+                    }
+                }
+            }
+            return cells;
         }
 
         private Sprite LoadBorderedHexSprite()
@@ -617,6 +954,7 @@ namespace EdoStrategy.Units
 
         private void RefreshPlannedArrows()
         {
+            ClearOrderVisuals();
             foreach (KeyValuePair<UnitData, UnitView> entry in views)
             {
                 UnitData unit = entry.Key;
@@ -634,6 +972,321 @@ namespace EdoStrategy.Units
                       turnManager.IsUnitSelected(unit)));
                 view.SetArrowVisible(visible);
             }
+
+            if (unitManager == null)
+            {
+                return;
+            }
+
+            foreach (UnitData unit in unitManager.Units)
+            {
+                if (unit == null ||
+                    !unit.IsAlive ||
+                    unit.faction != Faction.Player ||
+                    unit.pendingOrders == null ||
+                    (!ShowAllPlannedArrows &&
+                     (turnManager == null ||
+                      !turnManager.IsUnitSelected(unit))))
+                {
+                    continue;
+                }
+
+                for (int i = 0; i < unit.pendingOrders.Count; i++)
+                {
+                    Order order = unit.pendingOrders[i];
+                    if (order == null)
+                    {
+                        continue;
+                    }
+
+                    switch (order.orderType)
+                    {
+                        case OrderType.Attack:
+                            DrawAttackOrder(unit, order);
+                            break;
+                        case OrderType.Assault:
+                            DrawAssaultOrder(unit, order);
+                            break;
+                        case OrderType.Ambush:
+                            DrawAmbushOrder(unit, order);
+                            break;
+                        case OrderType.Defend:
+                            DrawOrderBadge(unit, "[防]", new Color(
+                                0.35f, 0.85f, 1f, 0.95f));
+                            break;
+                        case OrderType.Entrench:
+                            DrawOrderBadge(unit, "[壕]", new Color(
+                                0.85f, 0.72f, 0.4f, 0.95f));
+                            break;
+                    }
+                }
+            }
+        }
+
+        private void DrawAttackOrder(UnitData attacker, Order order)
+        {
+            UnitData target = unitManager.GetUnitById(order.targetUnitId);
+            if (target == null ||
+                !target.IsAlive ||
+                target.faction != Faction.Enemy)
+            {
+                return;
+            }
+
+            DrawOrderArrow(
+                new List<Vector2Int>
+                {
+                    new Vector2Int(attacker.x, attacker.y),
+                    new Vector2Int(target.x, target.y)
+                },
+                new Color(1f, 0.2f, 0.18f, 0.95f),
+                "AttackOrderArrow",
+                14);
+        }
+
+        private void DrawAssaultOrder(UnitData unit, Order order)
+        {
+            if (order.path != null && order.path.Count > 1)
+            {
+                DrawOrderArrow(
+                    order.path,
+                    new Color(1f, 0.85f, 0.2f, 0.95f),
+                    "AssaultMoveArrow",
+                    13);
+            }
+
+            if (order.secondaryTargetX < 0 ||
+                order.secondaryTargetY < 0)
+            {
+                return;
+            }
+
+            Vector2Int destination = order.path != null &&
+                order.path.Count > 0
+                    ? order.path[order.path.Count - 1]
+                    : new Vector2Int(unit.x, unit.y);
+            DrawOrderArrow(
+                new List<Vector2Int>
+                {
+                    destination,
+                    new Vector2Int(
+                        order.secondaryTargetX,
+                        order.secondaryTargetY)
+                },
+                new Color(1f, 0.2f, 0.18f, 0.95f),
+                "AssaultAttackArrow",
+                15);
+            DrawOrderCellMarker(
+                new Vector2Int(
+                    order.secondaryTargetX,
+                    order.secondaryTargetY),
+                new Color(1f, 0.3f, 0.12f, 0.55f),
+                "AssaultTargetMarker",
+                10);
+        }
+
+        private void DrawAmbushOrder(UnitData unit, Order order)
+        {
+            if (order.secondaryTargetX < 0 ||
+                order.secondaryTargetY < 0)
+            {
+                return;
+            }
+
+            Vector2Int target = new Vector2Int(
+                order.secondaryTargetX,
+                order.secondaryTargetY);
+            DrawOrderArrow(
+                new List<Vector2Int>
+                {
+                    new Vector2Int(unit.x, unit.y),
+                    target
+                },
+                new Color(0.7f, 0.25f, 1f, 0.95f),
+                "AmbushWatchArrow",
+                14);
+            DrawOrderCellMarker(
+                target,
+                new Color(0.7f, 0.25f, 1f, 0.5f),
+                "AmbushWatchMarker",
+                10);
+        }
+
+        private void DrawOrderBadge(
+            UnitData unit,
+            string text,
+            Color color)
+        {
+            GameObject badgeObject = new GameObject("OrderBadge_" + text);
+            badgeObject.transform.SetParent(
+                unitContainer != null ? unitContainer : transform,
+                false);
+            badgeObject.transform.position =
+                GetCellWorldPosition(unit.x, unit.y) +
+                new Vector3(0f, 0.34f, -0.1f);
+            TextMesh badge = badgeObject.AddComponent<TextMesh>();
+            badge.text = text;
+            badge.anchor = TextAnchor.MiddleCenter;
+            badge.alignment = TextAlignment.Center;
+            badge.fontSize = 36;
+            badge.characterSize = 0.075f;
+            badge.color = color;
+            Renderer badgeRenderer = badge.GetComponent<Renderer>();
+            if (badgeRenderer != null)
+            {
+                badgeRenderer.sortingOrder = 20;
+            }
+            orderVisuals.Add(badgeObject);
+        }
+
+        private void DrawOrderArrow(
+            IReadOnlyList<Vector2Int> path,
+            Color color,
+            string name,
+            int sortingOrder)
+        {
+            if (path == null || path.Count < 2)
+            {
+                return;
+            }
+
+            EnsureOrderArrowAssets();
+            if (orderArrowMaterial == null)
+            {
+                return;
+            }
+
+            GameObject lineObject = new GameObject(name);
+            lineObject.transform.SetParent(
+                tilemap != null ? tilemap.transform : unitContainer,
+                false);
+            LineRenderer line = lineObject.AddComponent<LineRenderer>();
+            line.useWorldSpace = true;
+            line.positionCount = path.Count;
+            line.startWidth = 0.055f;
+            line.endWidth = 0.055f;
+            line.numCapVertices = 2;
+            line.material = orderArrowMaterial;
+            line.startColor = color;
+            line.endColor = color;
+            line.sortingOrder = sortingOrder;
+            var points = new Vector3[path.Count];
+            for (int i = 0; i < path.Count; i++)
+            {
+                points[i] = GetCellWorldPosition(path[i].x, path[i].y);
+            }
+            line.SetPositions(points);
+            orderVisuals.Add(lineObject);
+
+            if (orderArrowHeadSprite == null)
+            {
+                return;
+            }
+
+            GameObject headObject = new GameObject(name + "_Head");
+            headObject.transform.SetParent(
+                tilemap != null ? tilemap.transform : unitContainer,
+                false);
+            SpriteRenderer head = headObject.AddComponent<SpriteRenderer>();
+            head.sprite = orderArrowHeadSprite;
+            head.color = color;
+            head.sortingOrder = sortingOrder + 1;
+            Vector3 direction =
+                points[points.Length - 1] - points[points.Length - 2];
+            headObject.transform.position = points[points.Length - 1];
+            if (direction.sqrMagnitude > 0.0001f)
+            {
+                float angle = Mathf.Atan2(direction.y, direction.x) *
+                    Mathf.Rad2Deg - 90f;
+                headObject.transform.rotation =
+                    Quaternion.Euler(0f, 0f, angle);
+            }
+            headObject.transform.localScale =
+                new Vector3(0.2f, 0.2f, 1f);
+            orderVisuals.Add(headObject);
+        }
+
+        private void DrawOrderCellMarker(
+            Vector2Int cell,
+            Color color,
+            string name,
+            int sortingOrder)
+        {
+            GameObject markerObject = new GameObject(
+                name + "_" + cell.x + "_" + cell.y);
+            markerObject.transform.SetParent(
+                tilemap != null ? tilemap.transform : unitContainer,
+                false);
+            markerObject.transform.position =
+                GetCellWorldPosition(cell.x, cell.y);
+            SpriteRenderer marker =
+                markerObject.AddComponent<SpriteRenderer>();
+            marker.sprite = LoadBorderedHexSprite();
+            if (marker.sprite == null)
+            {
+                marker.sprite = CreateHighlightCircleSprite();
+            }
+            marker.color = color;
+            marker.sortingOrder = sortingOrder;
+            orderVisuals.Add(markerObject);
+        }
+
+        private void EnsureOrderArrowAssets()
+        {
+            if (orderArrowMaterial == null)
+            {
+                Shader shader = Shader.Find("Sprites/Default");
+                if (shader != null)
+                {
+                    orderArrowMaterial = new Material(shader);
+                }
+            }
+            if (orderArrowHeadSprite == null)
+            {
+                orderArrowHeadSprite = CreateOrderArrowHeadSprite();
+            }
+        }
+
+        private static Sprite CreateOrderArrowHeadSprite()
+        {
+            const int size = 24;
+            var texture =
+                new Texture2D(size, size, TextureFormat.RGBA32, false);
+            var pixels = new Color32[size * size];
+            for (int y = 0; y < size; y++)
+            {
+                float halfWidth =
+                    (size - y - 1) / (float)(size - 1) * size * 0.5f;
+                float center = (size - 1) * 0.5f;
+                for (int x = 0; x < size; x++)
+                {
+                    bool inside = y < size - 2 &&
+                        Mathf.Abs(x - center) <= halfWidth;
+                    pixels[y * size + x] = inside
+                        ? new Color32(255, 255, 255, 255)
+                        : new Color32(255, 255, 255, 0);
+                }
+            }
+            texture.SetPixels32(pixels);
+            texture.Apply();
+            texture.hideFlags = HideFlags.DontSave;
+            return Sprite.Create(
+                texture,
+                new Rect(0f, 0f, size, size),
+                new Vector2(0.5f, 0.5f),
+                size);
+        }
+
+        private void ClearOrderVisuals()
+        {
+            for (int i = 0; i < orderVisuals.Count; i++)
+            {
+                if (orderVisuals[i] != null)
+                {
+                    Destroy(orderVisuals[i]);
+                }
+            }
+            orderVisuals.Clear();
         }
 
         private static bool HasMoveOrder(UnitData unit)
